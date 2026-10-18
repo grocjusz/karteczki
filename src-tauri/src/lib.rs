@@ -177,12 +177,17 @@ struct Info {
 
 #[tauri::command]
 fn get_info(app: AppHandle, state: State<AppState>) -> Info {
+    // Ustawienia odczytujemy raz, do kopii. Dwie blokady tego samego zamka w jednym wyrażeniu
+    // zawieszały aplikację w wersji 1.4.0 (druga czekała w nieskończoność na pierwszą).
+    let settings = state.settings.lock().unwrap().clone();
+    let data = data_dir(&state).to_string_lossy().into();
+    let backups = backup_dir(&app).to_string_lossy().into();
     Info {
-        data_dir: data_dir(&state).to_string_lossy().into(),
-        backup_dir: backup_dir(&app).to_string_lossy().into(),
-        backup_custom: state.settings.lock().unwrap().backup_dir.is_some(),
+        data_dir: data,
+        backup_dir: backups,
+        backup_custom: settings.backup_dir.is_some(),
         version: app.package_info().version.to_string(),
-        default_color: state.settings.lock().unwrap().default_color.clone().unwrap_or_else(|| "default".into()),
+        default_color: settings.default_color.unwrap_or_else(|| "default".into()),
         attach_supported: cfg!(windows),
     }
 }

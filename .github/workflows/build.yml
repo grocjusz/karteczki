@@ -41,6 +41,43 @@ jobs:
       - name: Testy rdzenia
         run: cargo test --manifest-path src-tauri/Cargo.toml
 
+      - name: Test uruchomienia (czy okno odpowiada)
+        shell: pwsh
+        run: |
+          npx tauri build --debug --no-bundle
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          $data = "C:\KarteczkiSmoke"
+          New-Item -ItemType Directory -Force "$data\notes" | Out-Null
+          $cfg = Join-Path $env:APPDATA "pl.grocjusz.karteczki"
+          New-Item -ItemType Directory -Force $cfg | Out-Null
+          @{ dataDir = $data; firstRunDone = $true } | ConvertTo-Json | Set-Content -Encoding utf8 "$cfg\settings.json"
+          $n = @{ id = "smoke"; title = "Test"; html = "<p>Test</p>"; color = "yellow"; archived = $false; trashedAt = $null; createdAt = 1; updatedAt = 2 }
+          $n | ConvertTo-Json | Set-Content -Encoding utf8 "$data\notes\smoke.json"
+          Add-Type @"
+          using System; using System.Text; using System.Runtime.InteropServices;
+          public static class S {
+            public delegate bool P(IntPtr h, IntPtr l);
+            [DllImport("user32.dll")] public static extern bool EnumWindows(P f, IntPtr l);
+            [DllImport("user32.dll")] public static extern int GetWindowThreadProcessId(IntPtr h, out int pid);
+            [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
+            [DllImport("user32.dll")] public static extern bool IsHungAppWindow(IntPtr h);
+            [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetWindowText(IntPtr h, StringBuilder s, int n);
+            [DllImport("user32.dll", CharSet=CharSet.Auto)] public static extern IntPtr SendMessageTimeout(IntPtr h, uint m, IntPtr w, IntPtr l, uint f, uint t, out IntPtr r);
+            public static IntPtr Main(int pid) { IntPtr found = IntPtr.Zero;
+              EnumWindows((h, l) => { int p; GetWindowThreadProcessId(h, out p); var t = new StringBuilder(64); GetWindowText(h, t, 64); if (p == pid && t.ToString() == "Karteczki" && IsWindowVisible(h)) { found = h; return false; } return true; }, IntPtr.Zero); return found; }
+            public static bool Responds(IntPtr h) { IntPtr r; return SendMessageTimeout(h, 0, IntPtr.Zero, IntPtr.Zero, 2, 3000, out r) != IntPtr.Zero && !IsHungAppWindow(h); }
+          }
+          "@
+          $p = Start-Process "src-tauri\target\debug\karteczki.exe" -PassThru
+          Start-Sleep 15
+          $h = [S]::Main($p.Id)
+          $ok = (-not $p.HasExited) -and ($h -ne [IntPtr]::Zero) -and [S]::Responds($h)
+          Start-Sleep 5
+          $ok = $ok -and [S]::Responds($h)
+          Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+          if (-not $ok) { Write-Output "::error::Karteczki nie odpowiadają po uruchomieniu (okno=$h, zakończony=$($p.HasExited))"; exit 1 }
+          Write-Output "Okno Karteczek odpowiada."
+
       - name: Numer wersji i czy wydanie już istnieje
         id: ver
         shell: bash
