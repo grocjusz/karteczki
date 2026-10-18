@@ -365,6 +365,7 @@ fn refresh_attachments(app: &AppHandle) {
             continue;
         }
         let is_dir = Path::new(&path).is_dir();
+        let path = if is_dir { attach::canonical(&path) } else { path };
         fresh.insert(n.id, (path, is_dir));
     }
     let old = std::mem::replace(&mut *state.attached.lock().unwrap(), fresh.clone());
@@ -435,7 +436,11 @@ fn spawn_attach_loop(app: AppHandle) {
             }
             let (title, class, rect) = attach::win::describe(hwnd);
             if hwnd != last.hwnd || title != last.title {
-                let folder = if class == attach::EXPLORER_CLASS { attach::win::explorer_folder(hwnd, &title) } else { None };
+                let folder = if class == attach::EXPLORER_CLASS {
+                    attach::win::explorer_folder(hwnd, &title).map(|f| attach::canonical(&f))
+                } else {
+                    None
+                };
                 last = attach::Target { hwnd, title, class, folder, rect };
             } else {
                 last.rect = rect;
@@ -448,8 +453,16 @@ fn spawn_attach_loop(app: AppHandle) {
                 let shown = state.attach_shown.lock().unwrap().get(id).copied();
                 match (want, shown) {
                     (true, None) => show_attached(&app, id, last.rect),
-                    // Okno dokumentu przesunięte — karteczka idzie za nim.
-                    (true, Some(r)) if r != last.rect => show_attached(&app, id, last.rect),
+                    (true, Some(r)) => {
+                        // Okno dokumentu przesunięte albo karteczka zniknęła (np. zamknięta z pulpitu) — pokazujemy ponownie.
+                        let visible = app
+                            .get_webview_window(&sticky_label(id))
+                            .and_then(|w| w.is_visible().ok())
+                            .unwrap_or(false);
+                        if r != last.rect || !visible {
+                            show_attached(&app, id, last.rect);
+                        }
+                    }
                     (false, Some(_)) => {
                         state.attach_shown.lock().unwrap().remove(id);
                         if let Some(w) = app.get_webview_window(&sticky_label(id)) {

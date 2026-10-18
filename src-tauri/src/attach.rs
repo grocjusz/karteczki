@@ -126,6 +126,24 @@ pub fn file_url_to_path(url: &str) -> Option<String> {
     Some(if unc { format!("\\\\{path}") } else { path })
 }
 
+/// Pełna, długa postać ścieżki (np. „RUNNER~1” → „runneradmin”), żeby porównanie folderów
+/// nie zależało od tego, jak ścieżkę zapisał Eksplorator, a jak okno wyboru folderu.
+pub fn canonical(path: &str) -> String {
+    match std::fs::canonicalize(path) {
+        Ok(p) => {
+            let s = p.to_string_lossy().to_string();
+            if let Some(rest) = s.strip_prefix(r"\\?\UNC\") {
+                format!(r"\\{rest}")
+            } else if let Some(rest) = s.strip_prefix(r"\\?\") {
+                rest.to_string()
+            } else {
+                s
+            }
+        }
+        Err(_) => path.to_string(),
+    }
+}
+
 /// Pozycja karteczki przy oknie dokumentu, tak żeby nie wychodziła poza to okno.
 pub fn place(rect: Rect, g: Geom) -> (i32, i32) {
     let (l, t, r, b) = rect;

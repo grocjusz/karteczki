@@ -77,3 +77,62 @@ jobs:
           $out += "Czy proces żyje: $(-not $p.HasExited)`n"
           $out = $out.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
           Write-Output "::notice title=app::$out"
+      - name: Test przypięcia w trakcie pracy (karteczka z pulpitu, polskie znaki, Dokumenty)
+        if: always()
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          Get-Process karteczki -ErrorAction SilentlyContinue | Stop-Process -Force
+          Get-Process explorer -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowTitle -ne '' } | ForEach-Object { }
+          $data = "C:\KarteczkiData"
+          Remove-Item "$data\notes\*" -Force -ErrorAction SilentlyContinue
+          $pl = "C:\KarteczkiTest\Zażółć Klienci"
+          $docs = [Environment]::GetFolderPath('MyDocuments') + "\Umowy"
+          New-Item -ItemType Directory -Force $pl, $docs | Out-Null
+          $cfg = Join-Path $env:APPDATA "pl.grocjusz.karteczki"
+          '{"test2":{"x":50,"y":500,"w":300,"h":300,"onTop":false}}' | Set-Content -Encoding utf8 "$cfg\karteczki-na-pulpicie.json"
+          function Note($id, $attach, $upd) {
+            $n = @{ id = $id; title = $id; html = "<p>$id</p>"; color = "yellow"; archived = $false; trashedAt = $null; createdAt = 1; updatedAt = $upd; attach = $attach }
+            $n | ConvertTo-Json | Set-Content -Encoding utf8 "$data\notes\$id.json"
+          }
+          Note "test1" $null 2
+          Note "test2" $null 2
+          Add-Type @"
+          using System; using System.Text; using System.Runtime.InteropServices;
+          public static class W2 {
+            public delegate bool P(IntPtr h, IntPtr l);
+            [DllImport("user32.dll")] public static extern bool EnumWindows(P f, IntPtr l);
+            [DllImport("user32.dll")] public static extern int GetWindowThreadProcessId(IntPtr h, out int pid);
+            [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
+            [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetWindowText(IntPtr h, StringBuilder s, int n);
+            [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+            [StructLayout(LayoutKind.Sequential)] public struct R { public int L, T, Ri, B; }
+            [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out R r);
+            public static string List(int pid) {
+              var sb = new StringBuilder();
+              EnumWindows((h, l) => { int p; GetWindowThreadProcessId(h, out p); if (p == pid) { var t = new StringBuilder(256); GetWindowText(h, t, 256);
+                if (t.ToString() == "Karteczka") { R r; GetWindowRect(h, out r); sb.AppendFormat("  karteczka {0} widoczna={1} rect=({2},{3},{4},{5})\n", h, IsWindowVisible(h), r.L, r.T, r.Ri, r.B); } } return true; }, IntPtr.Zero);
+              return sb.ToString();
+            }
+            public static string Fg() { var h = GetForegroundWindow(); var t = new StringBuilder(256); GetWindowText(h, t, 256); R r; GetWindowRect(h, out r); return "'" + t + "' rect=(" + r.L + "," + r.T + "," + r.Ri + "," + r.B + ")"; }
+          }
+          "@
+          $p = Start-Process "src-tauri\target\debug\karteczki.exe" -PassThru
+          Start-Sleep 10
+          $out = "1) start, test2 na pulpicie. Pierwszy plan: $([W2]::Fg())`n$([W2]::List($p.Id))"
+          Note "test1" $pl 5000
+          Note "test2" $docs 5000
+          Start-Sleep 4
+          $out += "2) po przypięciu obu do folderów (zmiana plików w trakcie pracy):`n$([W2]::List($p.Id))"
+          Start-Process explorer.exe "`"$pl`""
+          Start-Sleep 7
+          $out += "3) otwarty folder z polskimi znakami. Pierwszy plan: $([W2]::Fg())`n$([W2]::List($p.Id))"
+          Start-Process explorer.exe "`"$docs`""
+          Start-Sleep 7
+          $out += "4) otwarty Dokumenty\Umowy. Pierwszy plan: $([W2]::Fg())`n$([W2]::List($p.Id))"
+          Start-Process notepad.exe
+          Start-Sleep 5
+          $out += "5) Notatnik na wierzchu. Pierwszy plan: $([W2]::Fg())`n$([W2]::List($p.Id))"
+          $out += "proces żyje: $(-not $p.HasExited)`n"
+          $out = $out.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+          Write-Output "::notice title=app2::$out"
