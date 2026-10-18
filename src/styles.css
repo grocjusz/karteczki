@@ -454,6 +454,17 @@ kbd {
   text-align: left;
 }
 .menu-item:hover { background: var(--hover); }
+.attach-log {
+  margin: 8px 0 0;
+  padding: 8px 10px;
+  max-height: 180px;
+  overflow: auto;
+  background: rgba(127, 127, 127, 0.1);
+  border-radius: 6px;
+  font: 12px/1.5 Consolas, monospace;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
 .palette-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
 
 /* Kolory notatek — na końcu, żeby wygrały z tłem okienek. */

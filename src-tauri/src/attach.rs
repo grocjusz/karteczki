@@ -155,14 +155,14 @@ pub fn place(rect: Rect, g: Geom) -> (i32, i32) {
 #[cfg(windows)]
 pub mod win {
     use super::{last_segment, title_main, Rect};
-    use windows::core::{IUnknown, Interface};
+    use windows::core::{w, IUnknown, Interface, PCWSTR};
     use windows::Win32::Foundation::{HWND, RECT};
-    use windows::Win32::System::Com::{CoCreateInstance, CoInitializeEx, CLSCTX_ALL, COINIT_APARTMENTTHREADED};
+    use windows::Win32::System::Com::{CoCreateInstance, CoInitializeEx, IServiceProvider, CLSCTX_ALL, COINIT_APARTMENTTHREADED};
     use windows::Win32::System::Variant::{VARIANT, VT_I4};
-    use windows::Win32::UI::Shell::{IShellWindows, IWebBrowser2, ShellWindows};
+    use windows::Win32::UI::Shell::{IShellBrowser, IShellWindows, IWebBrowser2, ShellWindows, SID_STopLevelBrowser};
     use windows::Win32::UI::WindowsAndMessaging::{
-        GetClassNameW, GetForegroundWindow, GetWindowRect, GetWindowTextW, GetWindowThreadProcessId, ShowWindow,
-        SW_SHOWNOACTIVATE,
+        FindWindowExW, GetClassNameW, GetForegroundWindow, GetWindowRect, GetWindowTextW, GetWindowThreadProcessId, ShowWindow,
+        SW_HIDE, SW_SHOWNOACTIVATE,
     };
 
     pub fn init_com() {
@@ -199,8 +199,38 @@ pub mod win {
         }
     }
 
-    /// Wszystkie okna Eksploratora: (uchwyt okna, adres folderu).
-    pub fn shell_windows() -> Vec<(isize, String)> {
+/// Jedna karta Eksploratora: okno główne, okno karty, adres folderu.
+    pub struct ShellItem {
+        pub hwnd: isize,
+        pub tab: isize,
+        pub url: String,
+    }
+
+    /// Okno karty w Eksploratorze (Windows 11 ma karty; w Windows 10 to jedyne okno widoku).
+    fn tab_window(wb: &IWebBrowser2) -> isize {
+        unsafe {
+            let Ok(sp) = wb.cast::<IServiceProvider>() else { return 0 };
+            let sb = sp
+                .QueryService::<IShellBrowser>(&SID_STopLevelBrowser)
+                .or_else(|_| sp.QueryService::<IShellBrowser>(&IShellBrowser::IID));
+            match sb.and_then(|b| b.GetWindow()) {
+                Ok(h) => h.0 as isize,
+                Err(_) => 0,
+            }
+        }
+    }
+
+    /// Aktywna karta okna Eksploratora: pierwsze (najwyżej położone) okno klasy ShellTabWindowClass.
+    pub fn active_tab(hwnd: isize) -> isize {
+        unsafe {
+            FindWindowExW(Some(HWND(hwnd as *mut core::ffi::c_void)), None, w!("ShellTabWindowClass"), PCWSTR::null())
+                .map(|h| h.0 as isize)
+                .unwrap_or(0)
+        }
+    }
+
+    /// Wszystkie karty wszystkich okien Eksploratora.
+    pub fn shell_windows() -> Vec<ShellItem> {
         let mut out = Vec::new();
         unsafe {
             let Ok(sw) = CoCreateInstance::<_, IShellWindows>(&ShellWindows, None::<&IUnknown>, CLSCTX_ALL) else { return out };
@@ -213,24 +243,43 @@ pub mod win {
                 let Ok(wb) = disp.cast::<IWebBrowser2>() else { continue };
                 let Ok(h) = wb.HWND() else { continue };
                 let url = wb.LocationURL().map(|u| u.to_string()).unwrap_or_default();
-                out.push((h.0, url));
+                out.push(ShellItem { hwnd: h.0, tab: tab_window(&wb), url });
             }
         }
         out
     }
 
-    /// Folder otwarty w oknie Eksploratora (przy kilku kartach — ta, której nazwa jest w tytule).
+    /// Folder otwarty w aktywnej karcie okna Eksploratora.
     pub fn explorer_folder(hwnd: isize, title: &str) -> Option<String> {
-        let mut found: Vec<String> = shell_windows()
-            .into_iter()
-            .filter(|(h, _)| *h == hwnd)
-            .filter_map(|(_, url)| super::file_url_to_path(&url))
-            .collect();
-        if found.len() <= 1 {
-            return found.pop();
+        let items: Vec<ShellItem> = shell_windows().into_iter().filter(|i| i.hwnd == hwnd).collect();
+        let path = |i: &ShellItem| super::file_url_to_path(&i.url);
+        if items.len() <= 1 {
+            return items.first().and_then(path);
         }
-        let main = title_main(title);
-        found.iter().find(|p| last_segment(p).to_lowercase() == main).cloned().or_else(|| found.into_iter().next())
+        let active = active_tab(hwnd);
+        if active != 0 {
+            if let Some(i) = items.iter().find(|i| i.tab == active) {
+                return path(i);
+            }
+        }
+        // Zapasowo: karta, której nazwa jest na początku tytułu okna.
+        let title = title.trim().to_lowercase();
+        let main = title_main(&title);
+        items
+            .iter()
+            .filter_map(path)
+            .filter(|p| {
+                let name = last_segment(p).to_lowercase();
+                !name.is_empty() && (name == main || title.starts_with(&name))
+            })
+            .max_by_key(|p| last_segment(p).len())
+    }
+
+    /// Chowa okno (bezpośrednio w Windows — tak samo, jak je pokazujemy).
+    pub fn hide(hwnd: HWND) {
+        unsafe {
+            let _ = ShowWindow(hwnd, SW_HIDE);
+        }
     }
 
     /// Pokazuje okno bez zabierania fokusu oknu dokumentu.
@@ -331,10 +380,10 @@ mod diag {
             }
         }
         let all = win::shell_windows();
-        let _ = writeln!(out, "--- ShellWindows: {} okien", all.len());
-        for (h, url) in &all {
-            let _ = writeln!(out, "url={url:?}");
-            report(&mut out, "SW", *h, &attach);
+        let _ = writeln!(out, "--- ShellWindows: {} kart", all.len());
+        for i in &all {
+            let _ = writeln!(out, "url={:?} tab={} aktywna_karta_okna={}", i.url, i.tab, win::active_tab(i.hwnd));
+            report(&mut out, "SW", i.hwnd, &attach);
         }
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("diag.txt");
         std::fs::write(&path, &out).unwrap();

@@ -56,6 +56,7 @@ struct AppState {
     /// Karteczki zamknięte krzyżykiem: id → okno, przy którym je zamknięto (wrócą przy kolejnym otwarciu).
     attach_dismissed: Mutex<HashMap<String, isize>>,
     current_target: Mutex<isize>,
+    attach_log: Mutex<std::collections::VecDeque<String>>,
 }
 
 fn config_dir(app: &AppHandle) -> PathBuf {
@@ -349,11 +350,39 @@ fn dismiss(app: &AppHandle, id: &str) {
     state.attach_dismissed.lock().unwrap().insert(id.clone(), target);
     state.attach_shown.lock().unwrap().remove(&id);
     if let Some(w) = app.get_webview_window(&sticky_label(&id)) {
-        let _ = w.hide();
+        hide_window(&w);
     }
 }
 
 // ---------- karteczki przy plikach i folderach ----------
+
+/// Karteczki przy plikach pokazujemy i chowamy bezpośrednio w Windows (bez aktywowania okna),
+/// więc chowanie też musi iść tą drogą — inaczej Tauri uważa okno za już ukryte i nic nie robi.
+fn hide_window(w: &WebviewWindow) {
+    #[cfg(windows)]
+    if let Ok(h) = w.hwnd() {
+        attach::win::hide(h);
+        return;
+    }
+    let _ = w.hide();
+}
+
+/// Ostatnie okna, które Karteczki sprawdziły — widoczne w Ustawieniach, pomaga znaleźć problem.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn log_attach(state: &AppState, line: String) {
+    let mut log = state.attach_log.lock().unwrap();
+    if log.len() >= 12 {
+        log.pop_front();
+    }
+    log.push_back(format!("{}  {line}", chrono::Local::now().format("%H:%M:%S")));
+}
+
+#[tauri::command]
+fn get_attach_log(state: State<AppState>) -> Vec<String> {
+    let mut v: Vec<String> = state.attach_log.lock().unwrap().iter().cloned().collect();
+    v.reverse();
+    v
+}
 
 /// Odświeża listę notatek przypiętych do plików (po zapisie, usunięciu i zmianach z OneDrive).
 fn refresh_attachments(app: &AppHandle) {
@@ -442,6 +471,20 @@ fn spawn_attach_loop(app: AppHandle) {
                     None
                 };
                 last = attach::Target { hwnd, title, class, folder, rect };
+                let hits: Vec<String> = attached
+                    .values()
+                    .filter(|(p, d)| attach::matches(p, *d, &last))
+                    .map(|(p, _)| attach::last_segment(p).to_string())
+                    .collect();
+                log_attach(
+                    &state,
+                    format!(
+                        "„{}”{} → {}",
+                        last.title,
+                        last.folder.as_ref().map(|f| format!(" (folder {f})")).unwrap_or_default(),
+                        if hits.is_empty() { "brak przypiętej karteczki".to_string() } else { format!("pokazuję: {}", hits.join(", ")) }
+                    ),
+                );
             } else {
                 last.rect = rect;
             }
@@ -466,7 +509,7 @@ fn spawn_attach_loop(app: AppHandle) {
                     (false, Some(_)) => {
                         state.attach_shown.lock().unwrap().remove(id);
                         if let Some(w) = app.get_webview_window(&sticky_label(id)) {
-                            let _ = w.hide();
+                            hide_window(&w);
                         }
                     }
                     _ => {}
@@ -566,6 +609,7 @@ pub fn run() {
                 attach_shown: Mutex::new(HashMap::new()),
                 attach_dismissed: Mutex::new(HashMap::new()),
                 current_target: Mutex::new(0),
+                attach_log: Mutex::new(std::collections::VecDeque::new()),
             });
             let state = handle.state::<AppState>();
             let _ = std::fs::create_dir_all(data_dir(&state).join("notes"));
@@ -675,7 +719,8 @@ pub fn run() {
             set_sticky_on_top,
             show_main,
             is_sticky_open,
-            dismiss_attached
+            dismiss_attached,
+            get_attach_log
         ])
         .build(tauri::generate_context!())
         .expect("nie udało się uruchomić Karteczek")

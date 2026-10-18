@@ -552,6 +552,12 @@ async function openSettings(): Promise<void> {
     <section>
       <label class="switch"><input type="checkbox" id="autostart" ${auto ? 'checked' : ''}><span>Uruchamiaj Karteczki razem z Windows</span></label>
     </section>
+    <section id="attachSec">
+      <h3>Karteczki przy plikach i folderach</h3>
+      <p class="hint">Gdy karteczka nie pokazuje się przy folderze lub pliku, otwórz go, wróć tutaj i kliknij „Co widzą Karteczki”. Lista pokazuje ostatnio sprawdzone okna.</p>
+      <div class="row"><button class="btn ghost" id="attachLogBtn">Co widzą Karteczki</button></div>
+      <pre class="attach-log" id="attachLog" hidden></pre>
+    </section>
     <section>
       <h3>Kopie zapasowe</h3>
       <p class="hint">Raz dziennie Karteczki zapisują kopię wszystkich notatek na tym komputerze. Przechowywane są kopie z ostatnich 14 dni.</p>
@@ -597,6 +603,15 @@ async function openSettings(): Promise<void> {
   drawColors();
   modal.querySelector<HTMLButtonElement>('#openDir')!.onclick = () => api.openDataDir().catch(e => toast(errorText(e)));
   modal.querySelector<HTMLButtonElement>('#openBackups')!.onclick = () => api.openBackupDir().catch(e => toast(errorText(e)));
+  modal.querySelector<HTMLElement>('#attachSec')!.hidden = !info.attachSupported;
+  modal.querySelector<HTMLButtonElement>('#attachLogBtn')!.onclick = async () => {
+    const pre = modal.querySelector<HTMLElement>('#attachLog')!;
+    const lines = await api.attachLog().catch(() => [] as string[]);
+    pre.hidden = false;
+    pre.textContent = lines.length
+      ? lines.join('\n')
+      : 'Nic jeszcze nie sprawdzono. Okna są sprawdzane tylko wtedy, gdy co najmniej jedna notatka jest przypięta do pliku lub folderu.';
+  };
   modal.querySelector<HTMLButtonElement>('#checkUpd')!.onclick = () => void checkUpdates(true);
   modal.querySelector<HTMLInputElement>('#autostart')!.onchange = async ev => {
     const box = ev.target as HTMLInputElement;
