@@ -73,7 +73,6 @@ async function startMain(): Promise<void> {
   <div class="app${pref('panel', 'rozwiniety') === 'zwiniety' ? ' collapsed' : ''}" id="app">
     <header class="top">
       <button class="icon-btn big" id="menuBtn" title="Menu główne" aria-label="Menu główne">${icon('menu', 24)}</button>
-      <div class="brand"><img src="/logo.png" alt="" width="40" height="40"><span id="brandText">Karteczki</span></div>
       <label class="search">
         <span class="search-ic">${icon('search', 22)}</span>
         <input id="q" type="search" placeholder="Szukaj" autocomplete="off" spellcheck="false">
