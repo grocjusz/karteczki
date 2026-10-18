@@ -30,3 +30,50 @@ jobs:
           if (Test-Path $f) { $t = Get-Content $f -Raw } else { $t = "brak pliku diag.txt" }
           $t = $t.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
           Write-Output "::notice title=diag::$t"
+      - name: Budowa aplikacji (debug, z wbudowanym interfejsem)
+        continue-on-error: true
+        run: npx tauri build --debug --no-bundle
+      - name: Test całej aplikacji z karteczką przy folderze
+        if: always()
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $data = "C:\KarteczkiData"
+          New-Item -ItemType Directory -Force "$data\notes" | Out-Null
+          New-Item -ItemType Directory -Force "C:\KarteczkiTest\Klienci" | Out-Null
+          $cfg = Join-Path $env:APPDATA "pl.grocjusz.karteczki"
+          New-Item -ItemType Directory -Force $cfg | Out-Null
+          @{ dataDir = $data; firstRunDone = $true } | ConvertTo-Json | Set-Content -Encoding utf8 "$cfg\settings.json"
+          $note = @{ id = "test1"; title = "Przy folderze"; html = "<p>Widać mnie?</p>"; color = "yellow"; archived = $false; trashedAt = $null; createdAt = 1; updatedAt = 2; attach = "C:\KarteczkiTest\Klienci" }
+          $note | ConvertTo-Json | Set-Content -Encoding utf8 "$data\notes\test1.json"
+          Add-Type @"
+          using System; using System.Text; using System.Runtime.InteropServices; using System.Collections.Generic;
+          public static class W {
+            public delegate bool P(IntPtr h, IntPtr l);
+            [DllImport("user32.dll")] public static extern bool EnumWindows(P f, IntPtr l);
+            [DllImport("user32.dll")] public static extern int GetWindowThreadProcessId(IntPtr h, out int pid);
+            [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
+            [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetWindowText(IntPtr h, StringBuilder s, int n);
+            [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+            [StructLayout(LayoutKind.Sequential)] public struct R { public int L, T, Ri, B; }
+            [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out R r);
+            public static string List(int pid) {
+              var sb = new StringBuilder();
+              EnumWindows((h, l) => { int p; GetWindowThreadProcessId(h, out p); if (p == pid) { var t = new StringBuilder(256); GetWindowText(h, t, 256); R r; GetWindowRect(h, out r);
+                sb.AppendFormat("  okno {0} '{1}' widoczne={2} rect=({3},{4},{5},{6})\n", h, t, IsWindowVisible(h), r.L, r.T, r.Ri, r.B); } return true; }, IntPtr.Zero);
+              return sb.ToString();
+            }
+            public static string Fg() { var h = GetForegroundWindow(); int p; GetWindowThreadProcessId(h, out p); var t = new StringBuilder(256); GetWindowText(h, t, 256); return h + " pid=" + p + " '" + t + "'"; }
+          }
+          "@
+          $exe = "src-tauri\target\debug\karteczki.exe"
+          $out = "exe istnieje: $(Test-Path $exe)`n"
+          $p = Start-Process $exe -PassThru
+          Start-Sleep 10
+          $out += "Po starcie (pid $($p.Id)), pierwszy plan: $([W]::Fg())`n$([W]::List($p.Id))"
+          Start-Process explorer.exe "C:\KarteczkiTest\Klienci"
+          Start-Sleep 8
+          $out += "Po otwarciu folderu, pierwszy plan: $([W]::Fg())`n$([W]::List($p.Id))"
+          $out += "Czy proces żyje: $(-not $p.HasExited)`n"
+          $out = $out.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+          Write-Output "::notice title=app::$out"
