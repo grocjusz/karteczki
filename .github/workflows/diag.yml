@@ -184,3 +184,39 @@ jobs:
           $p2 = Start-Process $exe -ArgumentList "--autostart" -PassThru
           $out = $out.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
           Write-Output "::notice title=tlo::$out"
+      - name: Test przypomnienia
+        if: always()
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          Get-Process karteczki -ErrorAction SilentlyContinue | Stop-Process -Force
+          Start-Sleep 2
+          $data = "C:\KarteczkiData"
+          Remove-Item "$data\notes\*" -Force -ErrorAction SilentlyContinue
+          $cfg = Join-Path $env:APPDATA "pl.grocjusz.karteczki"
+          '{}' | Set-Content -Encoding utf8 "$cfg\karteczki-na-pulpicie.json"
+          Remove-Item "$cfg\przypomnienia-wyslane.json" -ErrorAction SilentlyContinue
+          $at = [DateTimeOffset]::UtcNow.AddSeconds(25).ToUnixTimeMilliseconds()
+          $n = @{ id = "rem1"; title = "Zadzwonić do klienta"; html = "<p>Termin JPK</p>"; color = "red"; archived = $false; trashedAt = $null; createdAt = 1; updatedAt = 2; reminder = @{ at = $at; repeat = "none" } }
+          $n | ConvertTo-Json -Depth 4 | Set-Content -Encoding utf8 "$data\notes\rem1.json"
+          Add-Type @"
+          using System; using System.Text; using System.Runtime.InteropServices;
+          public static class W4 {
+            public delegate bool P(IntPtr h, IntPtr l);
+            [DllImport("user32.dll")] public static extern bool EnumWindows(P f, IntPtr l);
+            [DllImport("user32.dll")] public static extern int GetWindowThreadProcessId(IntPtr h, out int pid);
+            [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
+            [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetWindowText(IntPtr h, StringBuilder s, int n);
+            public static string State(int pid) { var sb = new StringBuilder();
+              EnumWindows((h, l) => { int p; GetWindowThreadProcessId(h, out p); var t = new StringBuilder(256); GetWindowText(h, t, 256); var s = t.ToString();
+                if (p == pid && (s == "Karteczki" || s == "Karteczka")) sb.AppendFormat("  '{0}' widoczne={1}\n", s, IsWindowVisible(h)); return true; }, IntPtr.Zero); return sb.ToString(); }
+          }
+          "@
+          $p = Start-Process "src-tauri\target\debug\karteczki.exe" -ArgumentList "--autostart" -PassThru
+          Start-Sleep 8
+          $out = "1) start w tle, przypomnienie za ok. 17 s:`n$([W4]::State($p.Id))"
+          Start-Sleep 35
+          $out += "2) po terminie: proces żyje=$(-not $p.HasExited)`n$([W4]::State($p.Id))"
+          $out += "plik wysłanych: $(Get-Content "$cfg\przypomnienia-wyslane.json" -Raw -ErrorAction SilentlyContinue)`n"
+          $out = $out.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+          Write-Output "::notice title=przypomnienie::$out"

@@ -14,7 +14,9 @@ Nowe wersje: Karteczki same sprawdzają, czy jest aktualizacja, i pokazują przy
 
 ## Co potrafią
 
-- Notatki jako kolorowe karty, wyszukiwanie (bez względu na polskie znaki), archiwum i kosz (notatki z kosza znikają po 30 dniach).
+- Wygląd i układ jak w Google Keep: kolorowe karty, pasek „Utwórz notatkę…”, notatki przypięte u góry, widok siatki lub listy, zwijany panel boczny.
+- **Przypomnienia** jak w Keep (dzwonek): później dzisiaj, jutro, w przyszłym tygodniu albo własna data i godzina; mogą się powtarzać codziennie, co tydzień, co miesiąc lub co rok. O czasie Windows pokazuje powiadomienie, a notatka wyskakuje jako karteczka na pulpicie. Widok „Przypomnienia” zbiera nadchodzące i wysłane.
+- Wyszukiwanie (bez względu na polskie znaki), archiwum i kosz (notatki z kosza znikają po 30 dniach).
 - Formatowanie: pogrubienie, kursywa, podkreślenie, nagłówki, listy, **listy zadań do odhaczania**, klikalne linki (Ctrl+klik w edycji), obrazki (wklej, przeciągnij lub wybierz plik).
 - **Przypinanie na pulpicie** — notatka jako mała karteczka; może być zawsze na wierzchu. Karteczkę przesuwasz za górny pasek, a rozmiar zmieniasz, ciągnąc za brzeg lub prawy dolny róg. Przypięte karteczki wracają po ponownym uruchomieniu komputera.
 - **Przypinanie do pliku lub folderu** — przycisk ze spinaczem. Karteczka pokazuje się sama obok dokumentu (Word, Excel, PDF…) albo folderu w Eksploratorze, gdy go otworzysz, i chowa się, gdy przejdziesz do innego okna. Krzyżyk chowa ją do następnego otwarcia pliku.

@@ -73,6 +73,8 @@ export function popover(anchor: HTMLElement, cls: string): HTMLElement {
     pop.style.top = Math.max(8, r.bottom + hgt + 8 > innerHeight ? r.top - hgt - 6 : r.bottom + 6) + 'px';
   };
   requestAnimationFrame(place);
+  // Gdy zawartość dymka się zmienia (np. wybór daty), dymek przesuwa się, żeby zmieścić się w oknie.
+  new ResizeObserver(() => place()).observe(pop);
   setTimeout(() => document.addEventListener('mousedown', outside, true));
   function outside(e: MouseEvent) {
     if (!pop.isConnected) return document.removeEventListener('mousedown', outside, true);

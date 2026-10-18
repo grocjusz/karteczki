@@ -49,7 +49,7 @@ export async function startSticky(id: string): Promise<void> {
   const grip = h('div', 'grip', icon('grip', 16));
   grip.title = 'Przytrzymaj i przeciągnij, aby przesunąć karteczkę';
   const clip = h('span', 'sticky-clip');
-  const topBtn = btn('desktop', 'Zawsze na wierzchu');
+  const topBtn = btn('pin', 'Zawsze na wierzchu');
   const openBtn = btn('open', 'Otwórz w oknie Karteczek');
   const closeBtn = btn('close', 'Odepnij z pulpitu (notatka zostaje)');
   bar.append(colorBtn, grip, clip, topBtn, openBtn, closeBtn);
@@ -97,7 +97,7 @@ export async function startSticky(id: string): Promise<void> {
     const attached = editor.note.attach ?? null;
     root.classList.toggle('attached', !!attached);
     topBtn.hidden = !!attached;
-    topBtn.innerHTML = icon(onTop ? 'pinOn' : 'desktop', 16);
+    topBtn.innerHTML = icon(onTop ? 'pinOn' : 'pin', 16);
     topBtn.classList.toggle('on', onTop);
     topBtn.title = onTop ? 'Na wierzchu — kliknij, aby wyłączyć' : 'Zawsze na wierzchu';
     clip.innerHTML = attached ? icon('clip', 14) : '';

@@ -5,6 +5,7 @@
 // jest zapisywany lokalnie, bo układ pulpitu różni się między komputerami.
 
 mod attach;
+mod remind;
 mod store;
 
 use attach::Geom;
@@ -18,7 +19,7 @@ use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, State, 
 use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
 use tauri_plugin_opener::OpenerExt;
 
-const COLORS: [&str; 9] = ["default", "red", "orange", "yellow", "green", "teal", "blue", "purple", "pink"];
+const COLORS: [&str; 12] = ["default", "red", "orange", "yellow", "green", "teal", "blue", "storm", "purple", "pink", "clay", "chalk"];
 
 #[derive(Serialize, Deserialize, Default, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -57,6 +58,10 @@ struct AppState {
     attach_dismissed: Mutex<HashMap<String, isize>>,
     current_target: Mutex<isize>,
     attach_log: Mutex<std::collections::VecDeque<String>>,
+    /// Notatki z przypomnieniem: id → (przypomnienie, tytuł, fragment treści).
+    reminders: Mutex<HashMap<String, (remind::Reminder, String, String)>>,
+    /// Ostatni pokazany termin każdego przypomnienia (na tym komputerze).
+    fired: Mutex<HashMap<String, i64>>,
 }
 
 fn config_dir(app: &AppHandle) -> PathBuf {
@@ -396,7 +401,11 @@ fn get_attach_log(state: State<AppState>) -> Vec<String> {
 fn refresh_attachments(app: &AppHandle) {
     let state = app.state::<AppState>();
     let mut fresh: HashMap<String, (String, bool)> = HashMap::new();
+    let mut reminders = HashMap::new();
     for n in store::list(&data_dir(&state)).unwrap_or_default() {
+        if let Some(r) = n.reminder.clone().filter(|_| n.trashed_at.is_none()) {
+            reminders.insert(n.id.clone(), (r, n.title.clone(), remind::snippet(&n.html, 140)));
+        }
         let Some(path) = n.attach.filter(|p| !p.trim().is_empty()) else { continue };
         if n.trashed_at.is_some() || n.archived {
             continue;
@@ -405,6 +414,7 @@ fn refresh_attachments(app: &AppHandle) {
         let path = if is_dir { attach::canonical(&path) } else { path };
         fresh.insert(n.id, (path, is_dir));
     }
+    *state.reminders.lock().unwrap() = reminders;
     let old = std::mem::replace(&mut *state.attached.lock().unwrap(), fresh.clone());
     // Odpięte — zamykamy ich ukryte okna.
     for id in old.keys().filter(|id| !fresh.contains_key(*id)) {
@@ -530,6 +540,42 @@ fn spawn_attach_loop(app: AppHandle) {
 #[cfg(not(windows))]
 fn spawn_attach_loop(_app: AppHandle) {}
 
+// ---------- przypomnienia ----------
+
+fn check_reminders(app: &AppHandle) {
+    use tauri_plugin_notification::NotificationExt;
+    let state = app.state::<AppState>();
+    let now = chrono::Utc::now().timestamp_millis();
+    let reminders = state.reminders.lock().unwrap().clone();
+    let mut changed = false;
+    for (id, (r, title, text)) in reminders {
+        let last = state.fired.lock().unwrap().get(&id).copied();
+        let Some(due) = remind::should_fire(&r, now, last) else { continue };
+        state.fired.lock().unwrap().insert(id.clone(), due);
+        changed = true;
+        let heading = if title.trim().is_empty() { "Przypomnienie".to_string() } else { format!("Przypomnienie: {title}") };
+        let body = if text.is_empty() { "Kliknij karteczkę na pulpicie, aby ją otworzyć.".to_string() } else { text };
+        let _ = app.notification().builder().title(heading).body(body).show();
+        // Notatka wyskakuje jako karteczka na pulpicie (albo w oknie, gdy jest przypięta do pliku).
+        let attached = state.attached.lock().unwrap().contains_key(&id);
+        if attached || open_sticky_window(app, &id).is_err() {
+            if let Some(w) = app.get_webview_window("main") {
+                let _ = w.unminimize();
+                let _ = w.show();
+                let _ = w.set_focus();
+            }
+            let _ = app.emit_to("main", "open-note", id.clone());
+        } else if let Some(w) = app.get_webview_window(&sticky_label(&id)) {
+            let _ = w.set_focus();
+        }
+        let _ = app.emit("reminder-fired", &id);
+    }
+    if changed {
+        let fired = state.fired.lock().unwrap().clone();
+        save_json(&config_dir(app).join("przypomnienia-wyslane.json"), &fired);
+    }
+}
+
 // ---------- obserwacja folderu, kopie, kosz ----------
 
 fn start_watcher(app: &AppHandle) {
@@ -588,6 +634,7 @@ pub fn run() {
             }
         }))
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_autostart::init(MacosLauncher::LaunchAgent, Some(vec!["--autostart"])))
         .register_uri_scheme_protocol("kimg", |ctx, request| {
@@ -618,6 +665,8 @@ pub fn run() {
                 attach_dismissed: Mutex::new(HashMap::new()),
                 current_target: Mutex::new(0),
                 attach_log: Mutex::new(std::collections::VecDeque::new()),
+                reminders: Mutex::new(HashMap::new()),
+                fired: Mutex::new(load_json(&config_dir(&handle).join("przypomnienia-wyslane.json"))),
             });
             let state = handle.state::<AppState>();
             let _ = std::fs::create_dir_all(data_dir(&state).join("notes"));
@@ -654,6 +703,12 @@ pub fn run() {
 
             start_watcher(&handle);
             spawn_attach_loop(handle.clone());
+            let r = handle.clone();
+            std::thread::spawn(move || loop {
+                std::thread::sleep(Duration::from_secs(5));
+                check_reminders(&r);
+                std::thread::sleep(Duration::from_secs(10));
+            });
             let h = handle.clone();
             std::thread::spawn(move || loop {
                 housekeeping(&h);

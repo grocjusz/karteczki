@@ -30,6 +30,12 @@ pub struct Note {
     /// Plik lub folder, przy którym karteczka ma się pokazywać sama.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub attach: Option<String>,
+    /// Przypięta u góry listy (jak w Google Keep).
+    #[serde(default)]
+    pub pinned: bool,
+    /// Przypomnienie o notatce.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reminder: Option<crate::remind::Reminder>,
 }
 
 #[derive(Serialize, Debug)]
@@ -280,7 +286,7 @@ mod tests {
     }
 
     fn note(id: &str) -> Note {
-        Note { id: id.into(), title: "T".into(), html: "<p>x</p>".into(), color: "default".into(), archived: false, trashed_at: None, created_at: 0, updated_at: 0, attach: None }
+        Note { id: id.into(), title: "T".into(), html: "<p>x</p>".into(), color: "default".into(), archived: false, trashed_at: None, created_at: 0, updated_at: 0, attach: None, pinned: false, reminder: None }
     }
 
     #[test]

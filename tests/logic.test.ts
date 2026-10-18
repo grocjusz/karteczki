@@ -94,3 +94,32 @@ describe('wersje', () => {
     expect(isNewer('0.9.9', '1.0.0')).toBe(false);
   });
 });
+
+import { formatReminder, nextOccurrence, quickReminders, reminderShown } from '../src/logic';
+
+describe('przypomnienia', () => {
+  const at = (y: number, m: number, d: number, h = 9, min = 0) => new Date(y, m - 1, d, h, min).getTime();
+  it('liczy następny termin', () => {
+    expect(nextOccurrence({ at: at(2026, 10, 20), repeat: 'none' }, at(2026, 10, 19))).toBe(at(2026, 10, 20));
+    expect(nextOccurrence({ at: at(2026, 10, 20), repeat: 'none' }, at(2026, 10, 21))).toBeNull();
+    expect(nextOccurrence({ at: at(2026, 10, 20, 8, 30), repeat: 'daily' }, at(2026, 11, 2, 12))).toBe(at(2026, 11, 3, 8, 30));
+    expect(nextOccurrence({ at: at(2026, 1, 5, 10), repeat: 'weekly' }, at(2026, 1, 13, 0))).toBe(at(2026, 1, 19, 10));
+    expect(nextOccurrence({ at: at(2026, 1, 31), repeat: 'monthly' }, at(2026, 2, 1))).toBe(at(2026, 2, 28));
+    expect(nextOccurrence({ at: at(2026, 1, 31), repeat: 'monthly' }, at(2026, 3, 1))).toBe(at(2026, 3, 31));
+    expect(nextOccurrence({ at: at(2020, 5, 10, 7), repeat: 'yearly' }, at(2026, 10, 18))).toBe(at(2027, 5, 10, 7));
+    expect(reminderShown({ at: at(2026, 10, 1), repeat: 'none' }, at(2026, 10, 18))).toEqual({ at: at(2026, 10, 1), past: true });
+  });
+  it('opisuje termin po polsku', () => {
+    const now = at(2026, 10, 18, 12);
+    expect(formatReminder(at(2026, 10, 18, 20), now)).toBe('Dziś, 20:00');
+    expect(formatReminder(at(2026, 10, 19, 8), now)).toBe('Jutro, 08:00');
+    expect(formatReminder(at(2027, 1, 4, 8), now)).toMatch(/2027/);
+  });
+  it('podsuwa szybkie terminy jak w Keep', () => {
+    const sunday = at(2026, 10, 18, 12);
+    const q = quickReminders(sunday);
+    expect(q.map(x => x.label)).toEqual(['Później dzisiaj', 'Jutro', 'W przyszłym tygodniu']);
+    expect(q[2].at).toBe(at(2026, 10, 19, 8));
+    expect(quickReminders(at(2026, 10, 18, 19)).map(x => x.label)).toEqual(['Jutro', 'W przyszłym tygodniu']);
+  });
+});

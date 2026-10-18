@@ -12,21 +12,119 @@ export interface Note {
   updatedAt: number;
   /** Plik lub folder, przy którym karteczka pokazuje się sama. */
   attach?: string | null;
+  /** Przypięta u góry listy. */
+  pinned?: boolean;
+  reminder?: Reminder | null;
 }
 
-export type View = 'notes' | 'archive' | 'trash';
+export type Repeat = 'none' | 'daily' | 'weekly' | 'monthly' | 'yearly';
+
+export interface Reminder {
+  at: number;
+  repeat: Repeat;
+}
+
+export type View = 'notes' | 'reminders' | 'archive' | 'trash';
 
 export const COLORS: { id: string; name: string }[] = [
-  { id: 'default', name: 'Domyślny' },
-  { id: 'red', name: 'Czerwony' },
-  { id: 'orange', name: 'Pomarańczowy' },
-  { id: 'yellow', name: 'Żółty' },
-  { id: 'green', name: 'Zielony' },
-  { id: 'teal', name: 'Turkusowy' },
-  { id: 'blue', name: 'Niebieski' },
-  { id: 'purple', name: 'Fioletowy' },
-  { id: 'pink', name: 'Różowy' },
+  { id: 'default', name: 'Bez koloru' },
+  { id: 'red', name: 'Koralowy' },
+  { id: 'orange', name: 'Brzoskwiniowy' },
+  { id: 'yellow', name: 'Piaskowy' },
+  { id: 'green', name: 'Miętowy' },
+  { id: 'teal', name: 'Szałwiowy' },
+  { id: 'blue', name: 'Mglisty' },
+  { id: 'storm', name: 'Burzowy' },
+  { id: 'purple', name: 'Zmierzchowy' },
+  { id: 'pink', name: 'Kwiatowy' },
+  { id: 'clay', name: 'Gliniany' },
+  { id: 'chalk', name: 'Kredowy' },
 ];
+
+export const REPEATS: { id: Repeat; name: string }[] = [
+  { id: 'none', name: 'Nie powtarza się' },
+  { id: 'daily', name: 'Codziennie' },
+  { id: 'weekly', name: 'Co tydzień' },
+  { id: 'monthly', name: 'Co miesiąc' },
+  { id: 'yearly', name: 'Co rok' },
+];
+
+/** Termin numer n (0 = pierwszy), w czasie lokalnym — tak samo jak w rdzeniu aplikacji. */
+export function nthOccurrence(r: Reminder, n: number): number | null {
+  if (n === 0) return r.at;
+  const d = new Date(r.at);
+  const day = d.getDate();
+  switch (r.repeat) {
+    case 'none':
+      return null;
+    case 'daily':
+      d.setDate(day + n);
+      return d.getTime();
+    case 'weekly':
+      d.setDate(day + 7 * n);
+      return d.getTime();
+    case 'monthly':
+    case 'yearly': {
+      const months = r.repeat === 'monthly' ? n : 12 * n;
+      const target = new Date(d.getFullYear(), d.getMonth() + months, 1, d.getHours(), d.getMinutes(), d.getSeconds());
+      const last = new Date(target.getFullYear(), target.getMonth() + 1, 0).getDate();
+      target.setDate(Math.min(day, last));
+      return target.getTime();
+    }
+  }
+}
+
+/** Najbliższy przyszły termin albo null, gdy jednorazowe przypomnienie już minęło. */
+export function nextOccurrence(r: Reminder, now = Date.now()): number | null {
+  if (r.at > now) return r.at;
+  if (r.repeat === 'none') return null;
+  const step = { daily: 1, weekly: 7, monthly: 30, yearly: 365, none: 1 }[r.repeat] * 86_400_000;
+  let n = Math.max(0, Math.floor((now - r.at) / step) - 1);
+  let t = nthOccurrence(r, n);
+  while (t !== null && t <= now) t = nthOccurrence(r, ++n);
+  return t;
+}
+
+/** Termin do pokazania na karcie: najbliższy przyszły albo — dla minionego — ten, który minął. */
+export function reminderShown(r: Reminder, now = Date.now()): { at: number; past: boolean } {
+  const next = nextOccurrence(r, now);
+  return next === null ? { at: r.at, past: true } : { at: next, past: false };
+}
+
+const DAY = 86_400_000;
+function startOfDay(ms: number): number {
+  const d = new Date(ms);
+  d.setHours(0, 0, 0, 0);
+  return d.getTime();
+}
+
+/** „Dziś, 20:00”, „Jutro, 08:00”, „pon., 20 paź, 08:00”, z rokiem, gdy inny niż bieżący. */
+export function formatReminder(ms: number, now = Date.now()): string {
+  const time = new Date(ms).toLocaleTimeString('pl-PL', { hour: '2-digit', minute: '2-digit' });
+  const days = Math.round((startOfDay(ms) - startOfDay(now)) / DAY);
+  if (days === 0) return `Dziś, ${time}`;
+  if (days === 1) return `Jutro, ${time}`;
+  if (days === -1) return `Wczoraj, ${time}`;
+  const d = new Date(ms);
+  const sameYear = d.getFullYear() === new Date(now).getFullYear();
+  const date = d.toLocaleDateString('pl-PL', { weekday: 'short', day: 'numeric', month: 'short', ...(sameYear ? {} : { year: 'numeric' }) });
+  return `${date}, ${time}`;
+}
+
+/** Szybkie terminy jak w Keep: później dziś, jutro rano, w przyszły poniedziałek. */
+export function quickReminders(now = Date.now()): { label: string; at: number }[] {
+  const d = new Date(now);
+  const at = (days: number, h: number) => {
+    const x = new Date(d.getFullYear(), d.getMonth(), d.getDate() + days, h, 0, 0, 0);
+    return x.getTime();
+  };
+  const out: { label: string; at: number }[] = [];
+  if (d.getHours() < 18) out.push({ label: 'Później dzisiaj', at: at(0, 20) });
+  out.push({ label: 'Jutro', at: at(1, 8) });
+  const toMonday = ((8 - d.getDay()) % 7) || 7;
+  out.push({ label: 'W przyszłym tygodniu', at: at(toMonday, 8) });
+  return out;
+}
 
 export function newId(): string {
   const bytes = crypto.getRandomValues(new Uint8Array(12));
@@ -34,7 +132,7 @@ export function newId(): string {
 }
 
 export function emptyNote(color = 'default'): Note {
-  return { id: newId(), title: '', html: '', color, archived: false, trashedAt: null, createdAt: 0, updatedAt: 0, attach: null };
+  return { id: newId(), title: '', html: '', color, archived: false, trashedAt: null, createdAt: 0, updatedAt: 0, attach: null, pinned: false, reminder: null };
 }
 
 /** Nazwa pliku lub folderu z pełnej ścieżki Windows. */
@@ -149,6 +247,7 @@ export function matches(note: Note, query: string): boolean {
 export function inView(note: Note, view: View): boolean {
   if (view === 'trash') return note.trashedAt !== null;
   if (note.trashedAt !== null) return false;
+  if (view === 'reminders') return !!note.reminder;
   return view === 'archive' ? note.archived : !note.archived;
 }
 

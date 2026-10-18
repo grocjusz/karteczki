@@ -7,6 +7,9 @@ import { h, openLink, toast } from './ui';
 
 export interface EditorOptions {
   compact?: boolean;
+  /** Pasek formatowania schowany na start i włączany przyciskiem „Aa” (jak w Google Keep). */
+  formatHidden?: boolean;
+  placeholder?: string;
   /** Po każdym udanym zapisie (także kopii konfliktu). */
   onSaved?(note: Note): void;
   /** Ta notatka zmieniła się w międzyczasie gdzie indziej — nasza wersja jest teraz osobną notatką. */
@@ -44,8 +47,9 @@ export class NoteEditor {
     this.body = h('div', 'ed-body note-html');
     this.body.contentEditable = 'true';
     this.body.spellcheck = true;
-    this.body.dataset.placeholder = 'Notatka…';
+    this.body.dataset.placeholder = opts.placeholder ?? 'Notatka…';
     this.toolbar = this.buildToolbar();
+    if (opts.formatHidden) this.toolbar.hidden = true;
     this.linkBar = this.buildLinkBar();
     this.el.append(this.title, this.body, this.linkBar, this.toolbar);
     this.bind();
@@ -161,6 +165,8 @@ export class NoteEditor {
       [icon('link', 18), 'Link (Ctrl+K). Ctrl+klik otwiera link', '', () => this.showLinkBar()],
       [icon('image', 18), 'Obrazek (możesz też wkleić lub przeciągnąć)', '', () => this.pickImage()],
     ];
+    // W oknie głównym obrazek jest na pasku akcji pod notatką.
+    if (this.opts.formatHidden) tools.pop();
     const compactSkip = new Set(['S', 'H', 'Lista numerowana']);
     for (const [label, title, cls, run] of tools) {
       if (this.opts.compact && (compactSkip.has(label) || title === 'Lista numerowana')) continue;
@@ -252,7 +258,13 @@ export class NoteEditor {
     this.exec('formatBlock', this.closest('h1,h2,h3') ? '<p>' : '<h2>');
   }
 
-  private toggleChecklist(): void {
+  /** Pokazuje lub chowa pasek formatowania; zwraca, czy jest widoczny. */
+  toggleFormat(): boolean {
+    this.toolbar.hidden = !this.toolbar.hidden;
+    return !this.toolbar.hidden;
+  }
+
+  toggleChecklist(): void {
     if (!this.body.contains(getSelection()?.anchorNode ?? null)) this.focus(true);
     const list = this.closest('ul[data-checklist]');
     if (list) {
@@ -287,7 +299,7 @@ export class NoteEditor {
 
   // ---------- obrazki ----------
 
-  private pickImage(): void {
+  pickImage(): void {
     this.saveRange();
     const input = h('input');
     input.type = 'file';
