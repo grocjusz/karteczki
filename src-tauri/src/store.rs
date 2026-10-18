@@ -231,11 +231,35 @@ pub fn purge_trash(root: &Path, now_ms: i64, days: i64) -> io::Result<usize> {
 }
 
 /// Raz dziennie pakuje notatki i obrazki do pliku ZIP; zostawia `keep` najnowszych kopii.
-pub fn daily_backup(root: &Path, backups: &Path, day: &str, keep: usize) -> io::Result<Option<PathBuf>> {
+/// Nazwa komputera do nazw plików kopii — dzięki temu dwa komputery mogą zapisywać kopie
+/// w tym samym folderze (np. w OneDrive) bez nadpisywania się nawzajem.
+pub fn machine_tag() -> String {
+    let raw = std::env::var("COMPUTERNAME").or_else(|_| std::env::var("HOSTNAME")).unwrap_or_default();
+    let tag: String = raw
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .take(40)
+        .collect();
+    if tag.is_empty() { "komputer".into() } else { tag }
+}
+
+/// Data z nazwy pliku kopii: „karteczki-DOM-2026-10-18.zip” albo starsze „karteczki-2026-10-18.zip”.
+fn backup_day(name: &str) -> Option<&str> {
+    let stem = name.strip_suffix(".zip")?;
+    let day = stem.get(stem.len().checked_sub(10)?..)?;
+    let ok = day.len() == 10 && day.chars().enumerate().all(|(i, c)| if i == 4 || i == 7 { c == '-' } else { c.is_ascii_digit() });
+    ok.then_some(day)
+}
+
+/// Kopia zapasowa wszystkich notatek i obrazków z danego dnia. `force` — zrób ją od nowa,
+/// nawet jeśli dzisiejsza już jest (przycisk „Zrób kopię teraz”). Zostaje `keep` najnowszych
+/// kopii tego komputera.
+pub fn daily_backup(root: &Path, backups: &Path, machine: &str, day: &str, keep: usize, force: bool) -> io::Result<Option<PathBuf>> {
     fs::create_dir_all(backups)?;
-    let target = backups.join(format!("karteczki-{day}.zip"));
+    let prefix = format!("karteczki-{machine}-");
+    let target = backups.join(format!("{prefix}{day}.zip"));
     let mut created = None;
-    if !target.exists() {
+    if force || !target.exists() {
         let tmp = target.with_extension("tmp");
         {
             let file = fs::File::create(&tmp)?;
@@ -258,19 +282,21 @@ pub fn daily_backup(root: &Path, backups: &Path, day: &str, keep: usize) -> io::
         fs::rename(&tmp, &target)?;
         created = Some(target);
     }
-    let mut all: Vec<PathBuf> = fs::read_dir(backups)?
+    // Sprzątamy tylko kopie tego komputera (oraz starsze kopie bez nazwy komputera).
+    let mut all: Vec<(String, PathBuf)> = fs::read_dir(backups)?
         .filter_map(|e| e.ok())
-        .map(|e| e.path())
-        .filter(|p| {
-            p.file_name()
-                .and_then(|n| n.to_str())
-                .map(|n| n.starts_with("karteczki-") && n.ends_with(".zip"))
-                .unwrap_or(false)
+        .filter_map(|e| {
+            let name = e.file_name().to_string_lossy().to_string();
+            let legacy = name.len() == "karteczki-2026-10-18.zip".len() && name.starts_with("karteczki-");
+            if !(name.starts_with(&prefix) || legacy) {
+                return None;
+            }
+            backup_day(&name).map(|d| (d.to_string(), e.path()))
         })
         .collect();
     all.sort();
     while all.len() > keep {
-        let _ = fs::remove_file(all.remove(0));
+        let _ = fs::remove_file(all.remove(0).1);
     }
     Ok(created)
 }
@@ -368,11 +394,20 @@ mod tests {
         let root = tmp();
         let backups = root.join("kopie");
         save(&root, note("a1"), 0).unwrap();
+        // Starsza kopia bez nazwy komputera i kopia innego komputera w tym samym folderze.
+        fs::create_dir_all(&backups).unwrap();
+        fs::write(backups.join("karteczki-2026-09-01.zip"), b"x").unwrap();
+        fs::write(backups.join("karteczki-LAPTOP-2026-09-01.zip"), b"x").unwrap();
         for d in 1..=16 {
-            daily_backup(&root, &backups, &format!("2026-10-{d:02}"), 14).unwrap();
+            daily_backup(&root, &backups, "DOM", &format!("2026-10-{d:02}"), 14, false).unwrap();
         }
-        assert!(daily_backup(&root, &backups, "2026-10-16", 14).unwrap().is_none());
-        assert_eq!(fs::read_dir(&backups).unwrap().count(), 14);
+        assert!(daily_backup(&root, &backups, "DOM", "2026-10-16", 14, false).unwrap().is_none());
+        assert!(daily_backup(&root, &backups, "DOM", "2026-10-16", 14, true).unwrap().is_some());
+        let names: Vec<String> = fs::read_dir(&backups).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().to_string()).collect();
+        assert_eq!(names.iter().filter(|n| n.starts_with("karteczki-DOM-")).count(), 14);
+        assert!(names.contains(&"karteczki-LAPTOP-2026-09-01.zip".to_string()));
+        assert!(!names.contains(&"karteczki-2026-09-01.zip".to_string()));
+        assert!(!names.contains(&"karteczki-DOM-2026-10-01.zip".to_string()));
     }
 
     #[test]

@@ -37,7 +37,7 @@ const REPO = 'grocjusz/karteczki';
 const notes = new Map<string, Note>();
 let view: View = 'notes';
 let query = '';
-let info: Info = { dataDir: '', backupDir: '', version: '0.0.0', defaultColor: 'default', attachSupported: false };
+let info: Info = { dataDir: '', backupDir: '', backupCustom: false, version: '0.0.0', defaultColor: 'default', attachSupported: false };
 let editor: NoteEditor | null = null;
 let closeEditor: (() => Promise<void>) | null = null;
 let composerEditor: NoteEditor | null = null;
@@ -945,8 +945,14 @@ async function openSettings(): Promise<void> {
     </section>
     <section>
       <h3>Kopie zapasowe</h3>
-      <p class="hint">Raz dziennie Karteczki zapisują kopię wszystkich notatek na tym komputerze. Przechowywane są kopie z ostatnich 14 dni.</p>
-      <div class="row"><button class="btn ghost" id="openBackups">Otwórz folder kopii</button></div>
+      <p class="path" id="backupDir">${escapeHtml(info.backupDir)}</p>
+      <p class="hint">Raz dziennie Karteczki zapisują kopię wszystkich notatek i obrazków. Zostają kopie z ostatnich 14 dni. Możesz wskazać dowolny folder, np. na dysku zewnętrznym albo w OneDrive — w nazwie pliku jest nazwa komputera, więc dwa komputery nie nadpisują sobie kopii.</p>
+      <div class="row">
+        <button class="btn" id="chooseBackup">Zmień folder…</button>
+        <button class="btn ghost" id="defaultBackup"${info.backupCustom ? '' : ' hidden'}>Przywróć domyślny</button>
+        <button class="btn ghost" id="openBackups">Otwórz folder</button>
+        <button class="btn ghost" id="backupNow">Zrób kopię teraz</button>
+      </div>
     </section>
     <section>
       <h3>Skróty klawiszowe</h3>
@@ -988,6 +994,39 @@ async function openSettings(): Promise<void> {
   drawColors();
   modal.querySelector<HTMLButtonElement>('#openDir')!.onclick = () => api.openDataDir().catch(e => toast(errorText(e)));
   modal.querySelector<HTMLButtonElement>('#openBackups')!.onclick = () => api.openBackupDir().catch(e => toast(errorText(e)));
+  const showBackup = (dir: string, custom: boolean) => {
+    info.backupDir = dir;
+    info.backupCustom = custom;
+    modal.querySelector('#backupDir')!.textContent = dir;
+    modal.querySelector<HTMLElement>('#defaultBackup')!.hidden = !custom;
+  };
+  modal.querySelector<HTMLButtonElement>('#chooseBackup')!.onclick = async () => {
+    const { open } = await import('@tauri-apps/plugin-dialog');
+    const dir = await open({ directory: true, title: 'Wybierz folder na kopie zapasowe', defaultPath: info.backupDir });
+    if (typeof dir !== 'string' || !dir) return;
+    try {
+      showBackup(await api.setBackupDir(dir), true);
+      toast('Kopie zapasowe będą zapisywane w nowym folderze. Dzisiejsza kopia już tam jest.');
+    } catch (e) {
+      toast(errorText(e));
+    }
+  };
+  modal.querySelector<HTMLButtonElement>('#defaultBackup')!.onclick = async () => {
+    try {
+      showBackup(await api.setBackupDir(null), false);
+      toast('Kopie zapasowe wracają do domyślnego folderu na tym komputerze.');
+    } catch (e) {
+      toast(errorText(e));
+    }
+  };
+  modal.querySelector<HTMLButtonElement>('#backupNow')!.onclick = async () => {
+    try {
+      const file = await api.backupNow();
+      toast('Kopia zapisana: ' + baseName(file));
+    } catch (e) {
+      toast(errorText(e));
+    }
+  };
   modal.querySelector<HTMLElement>('#attachSec')!.hidden = !info.attachSupported;
   modal.querySelector<HTMLButtonElement>('#attachLogBtn')!.onclick = async () => {
     const pre = modal.querySelector<HTMLElement>('#attachLog')!;

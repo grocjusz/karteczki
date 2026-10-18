@@ -5,6 +5,7 @@ import type { Note } from './logic';
 export interface Info {
   dataDir: string;
   backupDir: string;
+  backupCustom: boolean;
   version: string;
   defaultColor: string;
   attachSupported: boolean;
@@ -32,6 +33,8 @@ export const api = {
   dismissAttached: (id: string) => invoke<void>('dismiss_attached', { id }),
   attachLog: () => invoke<string[]>('get_attach_log'),
   quit: () => invoke<void>('quit_app'),
+  setBackupDir: (path: string | null) => invoke<string>('set_backup_dir', { path }),
+  backupNow: () => invoke<string>('backup_now'),
   showMain: (id?: string) => invoke<void>('show_main', { id: id ?? null }),
 };
 

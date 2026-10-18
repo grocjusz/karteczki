@@ -30,6 +30,9 @@ struct Settings {
     /// Kolor, w którym startuje każda nowa notatka.
     #[serde(default)]
     default_color: Option<String>,
+    /// Folder na kopie zapasowe wybrany przez użytkownika (brak = domyślny na tym komputerze).
+    #[serde(default)]
+    backup_dir: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy)]
@@ -70,14 +73,47 @@ fn config_dir(app: &AppHandle) -> PathBuf {
     dir
 }
 
+fn default_backup_dir(app: &AppHandle) -> PathBuf {
+    app.path().app_local_data_dir().unwrap_or_else(|_| config_dir(app)).join("kopie")
+}
+
 fn backup_dir(app: &AppHandle) -> PathBuf {
-    let dir = app
-        .path()
-        .app_local_data_dir()
-        .unwrap_or_else(|_| config_dir(app))
-        .join("kopie");
+    let chosen = app.try_state::<AppState>().and_then(|s| s.settings.lock().unwrap().backup_dir.clone());
+    let dir = chosen.map(PathBuf::from).unwrap_or_else(|| default_backup_dir(app));
     let _ = std::fs::create_dir_all(&dir);
     dir
+}
+
+fn make_backup(app: &AppHandle, force: bool) -> std::io::Result<Option<PathBuf>> {
+    let state = app.state::<AppState>();
+    let day = chrono::Local::now().format("%Y-%m-%d").to_string();
+    store::daily_backup(&data_dir(&state), &backup_dir(app), &store::machine_tag(), &day, 14, force)
+}
+
+/// Wybór folderu na kopie (None = wróć do domyślnego). Sprawdzamy od razu, czy da się tam pisać.
+#[tauri::command]
+async fn set_backup_dir(app: AppHandle, path: Option<String>) -> Result<String, String> {
+    if let Some(p) = &path {
+        let dir = PathBuf::from(p);
+        std::fs::create_dir_all(&dir).map_err(|e| format!("Nie można utworzyć folderu: {e}"))?;
+        let probe = dir.join(".karteczki-test");
+        std::fs::write(&probe, b"ok").map_err(|e| format!("Nie można zapisywać w tym folderze: {e}"))?;
+        let _ = std::fs::remove_file(probe);
+    }
+    let state = app.state::<AppState>();
+    state.settings.lock().unwrap().backup_dir = path;
+    save_settings(&app, &state);
+    let _ = make_backup(&app, false);
+    Ok(backup_dir(&app).to_string_lossy().into())
+}
+
+#[tauri::command]
+async fn backup_now(app: AppHandle) -> Result<String, String> {
+    match make_backup(&app, true) {
+        Ok(Some(p)) => Ok(p.to_string_lossy().into()),
+        Ok(None) => Err("Nie udało się utworzyć kopii".into()),
+        Err(e) => Err(format!("Nie udało się utworzyć kopii: {e}")),
+    }
 }
 
 fn default_data_dir() -> PathBuf {
@@ -131,6 +167,8 @@ fn save_stickies(app: &AppHandle, state: &AppState) {
 struct Info {
     data_dir: String,
     backup_dir: String,
+    /// Czy folder kopii wybrał użytkownik (a nie domyślny).
+    backup_custom: bool,
     version: String,
     default_color: String,
     /// Czy ten system potrafi pokazywać karteczki przy plikach (tylko Windows).
@@ -142,6 +180,7 @@ fn get_info(app: AppHandle, state: State<AppState>) -> Info {
     Info {
         data_dir: data_dir(&state).to_string_lossy().into(),
         backup_dir: backup_dir(&app).to_string_lossy().into(),
+        backup_custom: state.settings.lock().unwrap().backup_dir.is_some(),
         version: app.package_info().version.to_string(),
         default_color: state.settings.lock().unwrap().default_color.clone().unwrap_or_else(|| "default".into()),
         attach_supported: cfg!(windows),
@@ -611,7 +650,7 @@ fn housekeeping(app: &AppHandle) {
     let state = app.state::<AppState>();
     let dir = data_dir(&state);
     let _ = store::purge_trash(&dir, chrono::Utc::now().timestamp_millis(), 30);
-    let _ = store::daily_backup(&dir, &backup_dir(app), &chrono::Local::now().format("%Y-%m-%d").to_string(), 14);
+    let _ = make_backup(app, false);
 }
 
 fn persist_soon(app: &AppHandle, state: &AppState) {
@@ -788,6 +827,8 @@ pub fn run() {
             is_sticky_open,
             dismiss_attached,
             get_attach_log,
+            set_backup_dir,
+            backup_now,
             quit_app
         ])
         .build(tauri::generate_context!())

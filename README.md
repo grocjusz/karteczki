@@ -33,7 +33,7 @@ Folder rozpoznają po jego ścieżce w oknie Eksploratora. Plik — po nazwie w 
 
 Domyślnie w folderze **OneDrive\Karteczki** (gdy OneDrive nie jest zainstalowany — w Dokumentach). Każda notatka to osobny plik, więc OneDrive przenosi je między komputerami, a Karteczki mogą być otwarte na dwóch komputerach jednocześnie. Gdy ta sama notatka zostanie zmieniona w tym samym czasie na dwóch komputerach, nic nie przepada — druga wersja pojawia się jako osobna notatka z dopiskiem „(konflikt zmian)”.
 
-Raz dziennie Karteczki robią kopię zapasową wszystkich notatek na tym komputerze (zostaje 14 ostatnich dni). Folder kopii otworzysz w Ustawieniach.
+Raz dziennie Karteczki robią kopię zapasową wszystkich notatek i obrazków (zostaje 14 ostatnich dni). Domyślnie kopie są na dysku tego komputera, poza OneDrive — żeby przypadkowe usunięcie notatek zsynchronizowane przez OneDrive nie objęło też kopii. W Ustawieniach możesz wybrać inny folder (np. dysk zewnętrzny albo OneDrive) i zrobić kopię od razu. W nazwie pliku kopii jest nazwa komputera, więc dwa komputery mogą zapisywać kopie w tym samym folderze.
 
 ## Skróty klawiszowe
 
