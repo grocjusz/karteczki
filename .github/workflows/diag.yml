@@ -1,0 +1,32 @@
+name: Diagnostyka Windows
+
+on:
+  push:
+    branches: ['diag/**']
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+      - run: npm ci
+      - run: npm run build
+      - name: Test wykrywania folderów
+        continue-on-error: true
+        run: cargo test --manifest-path src-tauri/Cargo.toml --lib diag -- --ignored --nocapture
+      - name: Wynik
+        if: always()
+        shell: pwsh
+        run: |
+          $f = "src-tauri/diag.txt"
+          if (Test-Path $f) { $t = Get-Content $f -Raw } else { $t = "brak pliku diag.txt" }
+          $t = $t.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+          Write-Output "::notice title=diag::$t"

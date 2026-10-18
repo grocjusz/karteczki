@@ -181,12 +181,12 @@ pub mod win {
         }
     }
 
-    /// Folder otwarty w oknie Eksploratora (przy kilku kartach — ta, której nazwa jest w tytule).
-    pub fn explorer_folder(hwnd: isize, title: &str) -> Option<String> {
+    /// Wszystkie okna Eksploratora: (uchwyt okna, adres folderu).
+    pub fn shell_windows() -> Vec<(isize, String)> {
+        let mut out = Vec::new();
         unsafe {
-            let sw: IShellWindows = CoCreateInstance(&ShellWindows, None::<&IUnknown>, CLSCTX_ALL).ok()?;
-            let count = sw.Count().ok()?;
-            let mut found: Vec<String> = Vec::new();
+            let Ok(sw) = CoCreateInstance::<_, IShellWindows>(&ShellWindows, None::<&IUnknown>, CLSCTX_ALL) else { return out };
+            let count = sw.Count().unwrap_or(0);
             for i in 0..count {
                 let mut v = VARIANT::default();
                 (*v.Anonymous.Anonymous).vt = VT_I4;
@@ -194,20 +194,25 @@ pub mod win {
                 let Ok(disp) = sw.Item(&v) else { continue };
                 let Ok(wb) = disp.cast::<IWebBrowser2>() else { continue };
                 let Ok(h) = wb.HWND() else { continue };
-                if h.0 != hwnd {
-                    continue;
-                }
-                let Ok(url) = wb.LocationURL() else { continue };
-                if let Some(p) = super::file_url_to_path(&url.to_string()) {
-                    found.push(p);
-                }
+                let url = wb.LocationURL().map(|u| u.to_string()).unwrap_or_default();
+                out.push((h.0, url));
             }
-            if found.len() <= 1 {
-                return found.pop();
-            }
-            let main = title_main(title);
-            found.iter().find(|p| last_segment(p).to_lowercase() == main).cloned().or_else(|| found.into_iter().next())
         }
+        out
+    }
+
+    /// Folder otwarty w oknie Eksploratora (przy kilku kartach — ta, której nazwa jest w tytule).
+    pub fn explorer_folder(hwnd: isize, title: &str) -> Option<String> {
+        let mut found: Vec<String> = shell_windows()
+            .into_iter()
+            .filter(|(h, _)| *h == hwnd)
+            .filter_map(|(_, url)| super::file_url_to_path(&url))
+            .collect();
+        if found.len() <= 1 {
+            return found.pop();
+        }
+        let main = title_main(title);
+        found.iter().find(|p| last_segment(p).to_lowercase() == main).cloned().or_else(|| found.into_iter().next())
     }
 
     /// Pokazuje okno bez zabierania fokusu oknu dokumentu.
@@ -263,5 +268,58 @@ mod tests {
         assert_eq!(place((0, 0, 1000, 800), g), (676, 96));
         // Małe okno: karteczka zostaje w jego granicach.
         assert_eq!(place((100, 100, 300, 250), g), (100, 100));
+    }
+}
+
+/// Diagnostyka na prawdziwym Windows (uruchamiana ręcznie w GitHub Actions).
+#[cfg(all(test, windows))]
+mod diag {
+    use super::*;
+    use std::fmt::Write as _;
+
+    fn report(out: &mut String, label: &str, hwnd: isize, attach: &[(&str, bool)]) {
+        let (title, class, rect) = win::describe(hwnd);
+        let folder = if class == EXPLORER_CLASS { win::explorer_folder(hwnd, &title) } else { None };
+        let _ = writeln!(out, "{label}: hwnd={hwnd} title={title:?} class={class:?} rect={rect:?} folder={folder:?}");
+        let t = Target { hwnd, title, class, folder, rect };
+        for (a, d) in attach {
+            let _ = writeln!(out, "   matches({a:?}, dir={d}) = {}", matches(a, *d, &t));
+        }
+    }
+
+    #[test]
+    #[ignore]
+    fn explorer_detection() {
+        let plain = std::path::PathBuf::from(r"C:\KarteczkiTest\Klienci");
+        let temp = std::env::temp_dir().join("Karteczki test").join("Umowy 2026");
+        for d in [&plain, &temp] {
+            std::fs::create_dir_all(d).unwrap();
+        }
+        let mut out = String::new();
+        let _ = writeln!(out, "temp_dir={:?}", std::env::temp_dir());
+        win::init_com();
+        let attach = [(plain.to_str().unwrap(), true), (temp.to_str().unwrap(), true)];
+        for d in [&plain, &temp] {
+            let _ = std::process::Command::new("explorer.exe").arg(d).spawn();
+            std::thread::sleep(std::time::Duration::from_secs(6));
+            match win::foreground() {
+                Some((h, pid)) => {
+                    let _ = writeln!(out, "--- po otwarciu {d:?}: pierwszy plan pid={pid}");
+                    report(&mut out, "FG", h, &attach);
+                }
+                None => {
+                    let _ = writeln!(out, "--- po otwarciu {d:?}: brak okna na pierwszym planie");
+                }
+            }
+        }
+        let all = win::shell_windows();
+        let _ = writeln!(out, "--- ShellWindows: {} okien", all.len());
+        for (h, url) in &all {
+            let _ = writeln!(out, "url={url:?}");
+            report(&mut out, "SW", *h, &attach);
+        }
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("diag.txt");
+        std::fs::write(&path, &out).unwrap();
+        println!("{out}");
     }
 }
