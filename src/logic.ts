@@ -10,6 +10,8 @@ export interface Note {
   trashedAt: number | null;
   createdAt: number;
   updatedAt: number;
+  /** Plik lub folder, przy którym karteczka pokazuje się sama. */
+  attach?: string | null;
 }
 
 export type View = 'notes' | 'archive' | 'trash';
@@ -31,8 +33,13 @@ export function newId(): string {
   return Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
 }
 
-export function emptyNote(): Note {
-  return { id: newId(), title: '', html: '', color: 'default', archived: false, trashedAt: null, createdAt: 0, updatedAt: 0 };
+export function emptyNote(color = 'default'): Note {
+  return { id: newId(), title: '', html: '', color, archived: false, trashedAt: null, createdAt: 0, updatedAt: 0, attach: null };
+}
+
+/** Nazwa pliku lub folderu z pełnej ścieżki Windows. */
+export function baseName(path: string): string {
+  return path.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || path;
 }
 
 const ALLOWED_TAGS = ['p', 'div', 'br', 'b', 'strong', 'i', 'em', 'u', 's', 'strike', 'h1', 'h2', 'h3', 'ul', 'ol', 'li', 'a', 'img', 'blockquote', 'code', 'pre', 'span', 'hr'];

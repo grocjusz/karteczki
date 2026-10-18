@@ -27,6 +27,9 @@ pub struct Note {
     pub created_at: i64,
     #[serde(default)]
     pub updated_at: i64,
+    /// Plik lub folder, przy którym karteczka ma się pokazywać sama.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attach: Option<String>,
 }
 
 #[derive(Serialize, Debug)]
@@ -277,7 +280,7 @@ mod tests {
     }
 
     fn note(id: &str) -> Note {
-        Note { id: id.into(), title: "T".into(), html: "<p>x</p>".into(), color: "default".into(), archived: false, trashed_at: None, created_at: 0, updated_at: 0 }
+        Note { id: id.into(), title: "T".into(), html: "<p>x</p>".into(), color: "default".into(), archived: false, trashed_at: None, created_at: 0, updated_at: 0, attach: None }
     }
 
     #[test]

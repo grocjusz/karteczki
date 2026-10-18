@@ -61,6 +61,29 @@ export function colorPicker(anchor: HTMLElement, current: string, pick: (color: 
   }
 }
 
+/** Pusty dymek przy przycisku; zamyka się po kliknięciu obok. */
+export function popover(anchor: HTMLElement, cls: string): HTMLElement {
+  closePopovers();
+  const pop = h('div', 'popover ' + cls);
+  document.body.append(pop);
+  const place = () => {
+    const r = anchor.getBoundingClientRect();
+    const w = pop.offsetWidth, hgt = pop.offsetHeight;
+    pop.style.left = Math.min(Math.max(8, r.left), innerWidth - w - 8) + 'px';
+    pop.style.top = Math.max(8, r.bottom + hgt + 8 > innerHeight ? r.top - hgt - 6 : r.bottom + 6) + 'px';
+  };
+  requestAnimationFrame(place);
+  setTimeout(() => document.addEventListener('mousedown', outside, true));
+  function outside(e: MouseEvent) {
+    if (!pop.isConnected) return document.removeEventListener('mousedown', outside, true);
+    if (!pop.contains(e.target as Node)) {
+      pop.remove();
+      document.removeEventListener('mousedown', outside, true);
+    }
+  }
+  return pop;
+}
+
 export function closePopovers(): void {
   document.querySelectorAll('.popover').forEach(p => p.remove());
 }

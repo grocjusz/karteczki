@@ -369,21 +369,92 @@ kbd {
 }
 
 /* ---------- karteczka na pulpicie ---------- */
-.sticky-mode { background: transparent; }
-.sticky { height: 100vh; display: flex; flex-direction: column; }
+.sticky-mode { background: var(--sticky-default); }
+.sticky { position: relative; height: 100vh; display: flex; flex-direction: column; }
 .sticky.c-default { background: var(--sticky-default); }
-.sticky-bar { display: flex; align-items: center; height: 32px; padding: 0 2px; flex: none; background: rgba(0, 0, 0, 0.06); }
-.sticky-bar .grip { flex: 1; align-self: stretch; cursor: move; }
-.sticky-bar .icon-btn { width: 28px; height: 28px; opacity: 0; transition: opacity 0.12s; }
-.sticky:hover .sticky-bar .icon-btn, .sticky-bar .icon-btn.on { opacity: 0.75; }
+.sticky-bar {
+  display: flex;
+  align-items: center;
+  height: 34px;
+  padding: 0 3px;
+  flex: none;
+  background: rgba(0, 0, 0, 0.07);
+  cursor: grab;
+  user-select: none;
+}
+.sticky-bar:active { cursor: grabbing; }
+.sticky-bar .grip { flex: 1; display: grid; place-items: center; opacity: 0.45; pointer-events: none; }
+.sticky-bar .grip .ic { transform: rotate(90deg); }
+.sticky-clip { display: grid; place-items: center; width: 22px; opacity: 0.7; pointer-events: auto; cursor: help; }
+.sticky-bar .icon-btn { width: 28px; height: 28px; opacity: 0.35; transition: opacity 0.12s; cursor: pointer; }
+.sticky:hover .sticky-bar .icon-btn, .sticky-bar .icon-btn.on { opacity: 0.8; }
 .sticky-bar .icon-btn:hover { opacity: 1; }
 .sticky .editor { flex: 1; min-height: 0; }
 .sticky .ed-title { font-size: 15px; padding: 8px 12px 0; }
 .sticky .ed-title:placeholder-shown:not(:focus) { height: 0; padding: 0; }
 .sticky .ed-body { min-height: 0; padding: 4px 12px 8px; font-size: 14px; }
-.sticky .ed-toolbar { opacity: 0; transition: opacity 0.12s; border-top-color: rgba(0, 0, 0, 0.08); padding: 0 4px; }
+.sticky .ed-toolbar { opacity: 0; transition: opacity 0.12s; border-top-color: rgba(0, 0, 0, 0.08); padding: 0 18px 0 4px; }
 .sticky:hover .ed-toolbar, .sticky .editor:focus-within .ed-toolbar { opacity: 1; }
 .sticky .tb { min-width: 28px; height: 28px; }
+.sticky.attached { box-shadow: inset 0 0 0 2px rgba(0, 0, 0, 0.12); }
+/* Uchwyty zmiany rozmiaru przy brzegach okna. */
+.rs { position: absolute; z-index: 5; }
+.rs-n, .rs-s { left: 8px; right: 8px; height: 5px; cursor: ns-resize; }
+.rs-n { top: 0; }
+.rs-s { bottom: 0; }
+.rs-e, .rs-w { top: 8px; bottom: 8px; width: 5px; cursor: ew-resize; }
+.rs-e { right: 0; }
+.rs-w { left: 0; }
+.rs-ne, .rs-nw, .rs-se, .rs-sw { width: 10px; height: 10px; }
+.rs-ne { top: 0; right: 0; cursor: nesw-resize; }
+.rs-sw { bottom: 0; left: 0; cursor: nesw-resize; }
+.rs-nw { top: 0; left: 0; cursor: nwse-resize; }
+.rs-se { bottom: 0; right: 0; cursor: nwse-resize; }
+.rs-corner {
+  position: absolute;
+  right: 2px;
+  bottom: 2px;
+  width: 14px;
+  height: 14px;
+  z-index: 6;
+  cursor: nwse-resize;
+  opacity: 0.45;
+  background:
+    linear-gradient(135deg, transparent 0 55%, currentColor 55% 62%, transparent 62% 72%, currentColor 72% 79%, transparent 79%);
+}
+.rs-corner:hover { opacity: 0.8; }
+
+/* ---------- przypinanie do pliku ---------- */
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  margin-top: 8px;
+  padding: 2px 8px 2px 6px;
+  border-radius: 12px;
+  background: rgba(127, 127, 127, 0.16);
+  font-size: 12px;
+}
+.chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.modal-chip { padding: 0 16px; }
+.modal-chip:empty { display: none; }
+.attach-menu { width: 300px; padding: 6px; }
+.attach-menu .hint { margin: 4px 8px 8px; color: var(--muted); font-size: 13px; line-height: 1.5; }
+.attach-menu .path { font-family: Consolas, monospace; font-size: 12px; overflow-wrap: anywhere; }
+.menu-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  border: 0;
+  background: transparent;
+  padding: 8px 10px;
+  border-radius: 6px;
+  text-align: left;
+}
+.menu-item:hover { background: var(--hover); }
+.palette-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
 
 /* Kolory notatek — na końcu, żeby wygrały z tłem okienek. */
 .c-default { background: var(--c-default); }

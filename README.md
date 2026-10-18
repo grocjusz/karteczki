@@ -16,9 +16,15 @@ Nowe wersje: Karteczki same sprawdzają, czy jest aktualizacja, i pokazują przy
 
 - Notatki jako kolorowe karty, wyszukiwanie (bez względu na polskie znaki), archiwum i kosz (notatki z kosza znikają po 30 dniach).
 - Formatowanie: pogrubienie, kursywa, podkreślenie, nagłówki, listy, **listy zadań do odhaczania**, klikalne linki (Ctrl+klik w edycji), obrazki (wklej, przeciągnij lub wybierz plik).
-- **Przypinanie na pulpicie** — notatka jako mała karteczka; może być zawsze na wierzchu. Przypięte karteczki wracają po ponownym uruchomieniu komputera.
+- **Przypinanie na pulpicie** — notatka jako mała karteczka; może być zawsze na wierzchu. Karteczkę przesuwasz za górny pasek, a rozmiar zmieniasz, ciągnąc za brzeg lub prawy dolny róg. Przypięte karteczki wracają po ponownym uruchomieniu komputera.
+- **Przypinanie do pliku lub folderu** — przycisk ze spinaczem. Karteczka pokazuje się sama obok dokumentu (Word, Excel, PDF…) albo folderu w Eksploratorze, gdy go otworzysz, i chowa się, gdy przejdziesz do innego okna. Krzyżyk chowa ją do następnego otwarcia pliku.
+- Kolor nowych notatek do wyboru w Ustawieniach.
 - Start razem z Windows (można wyłączyć w Ustawieniach).
 - Jasny lub ciemny wygląd — tak jak w Windows.
+
+### Jak Karteczki rozpoznają plik
+
+Folder rozpoznają po jego ścieżce w oknie Eksploratora. Plik — po nazwie w tytule okna programu (np. „Umowa.docx - Word”). Jeśli dwa różne pliki mają tę samą nazwę, karteczka pokaże się przy obu.
 
 ## Gdzie są notatki
 

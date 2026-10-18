@@ -4,6 +4,7 @@ import { api, errorText, type Info } from './api';
 import { NoteEditor } from './editor';
 import { icon } from './icons';
 import {
+  baseName,
   daysLeftInTrash,
   emptyNote,
   escapeHtml,
@@ -13,16 +14,13 @@ import {
   matches,
   renderHtml,
   serializeHtml,
+  COLORS,
   type Note,
   type View,
 } from './logic';
 import { startSticky } from './sticky';
-import { closePopovers, colorPicker, guardLinks, h, openLink, toast } from './ui';
+import { closePopovers, colorPicker, guardLinks, h, openLink, popover, toast } from './ui';
 
-guardLinks();
-const stickyMatch = /^#sticky=([A-Za-z0-9_-]+)$/.exec(location.hash);
-if (stickyMatch) void startSticky(stickyMatch[1]);
-else void startMain();
 
 // ====================================================================
 // Okno główne
@@ -32,7 +30,7 @@ const REPO = 'grocjusz/karteczki';
 const notes = new Map<string, Note>();
 let view: View = 'notes';
 let query = '';
-let info: Info = { dataDir: '', backupDir: '', version: '0.0.0' };
+let info: Info = { dataDir: '', backupDir: '', version: '0.0.0', defaultColor: 'default', attachSupported: false };
 let editor: NoteEditor | null = null;
 let closeEditor: (() => Promise<void>) | null = null;
 const renderCache = new Map<string, { key: number; html: string }>();
@@ -72,7 +70,7 @@ async function startMain(): Promise<void> {
     b.onclick = () => setView(b.dataset.view as View);
   });
   $('settingsBtn').onclick = () => void openSettings();
-  $('composer').onclick = () => openEditor(emptyNote(), true);
+  $('composer').onclick = () => openEditor(emptyNote(info.defaultColor), true);
   $('emptyTrash').onclick = () => void emptyTrash();
   const q = $('q') as HTMLInputElement;
   q.addEventListener('input', () => {
@@ -92,7 +90,7 @@ async function startMain(): Promise<void> {
     const mod = e.ctrlKey || e.metaKey;
     if (mod && e.key.toLowerCase() === 'n' && !e.shiftKey) {
       e.preventDefault();
-      if (!editor) openEditor(emptyNote(), true);
+      if (!editor) openEditor(emptyNote(info.defaultColor), true);
     } else if (mod && e.key.toLowerCase() === 'f') {
       e.preventDefault();
       if (!editor) {
@@ -236,6 +234,7 @@ function buildCard(n: Note): HTMLElement {
     meta.push(d <= 1 ? 'Zostanie usunięta jutro' : `Zostanie usunięta za ${d} dni`);
   } else if (n.archived && view !== 'archive') meta.push('W archiwum');
   if (meta.length) card.insertAdjacentHTML('beforeend', `<div class="card-meta">${meta.join(' · ')}</div>`);
+  if (n.attach) card.append(attachChip(n.attach));
 
   const actions = h('div', 'card-actions');
   const add = (ic: string, title: string, run: (btn: HTMLButtonElement) => void) => {
@@ -254,6 +253,7 @@ function buildCard(n: Note): HTMLElement {
   } else {
     add('palette', 'Kolor', b => colorPicker(b, n.color, c => void update(n, { color: c })));
     add('desktop', 'Przypnij na pulpicie', () => void pinToDesktop(n));
+    add('clip', 'Przypnij do pliku lub folderu', b => attachMenu(b, n.attach ?? null, path => void update(n, { attach: path }, path ? 'Karteczka pokaże się sama, gdy otworzysz: ' + baseName(path) : 'Odpięto od pliku')));
     if (n.archived) add('unarchive', 'Przywróć z archiwum', () => void update(n, { archived: false }, 'Przywrócono z archiwum', { archived: true }));
     else add('archive', 'Archiwizuj', () => void update(n, { archived: true }, 'Zarchiwizowano notatkę', { archived: false }));
     add('trash', 'Przenieś do kosza', () => void moveToTrash(n));
@@ -382,6 +382,51 @@ async function pinToDesktop(n: Note): Promise<void> {
   }
 }
 
+// ---------- przypinanie do pliku lub folderu ----------
+
+function attachChip(path: string): HTMLElement {
+  const chip = h('div', 'chip', `${icon('clip', 14)}<span>${escapeHtml(baseName(path))}</span>`);
+  chip.title = 'Pokazuje się sama przy: ' + path;
+  return chip;
+}
+
+function attachMenu(anchor: HTMLElement, current: string | null, apply: (path: string | null) => void): void {
+  const pop = popover(anchor, 'attach-menu');
+  if (!info.attachSupported) {
+    pop.append(h('p', 'hint', 'Ta funkcja działa w Windows.'));
+    return;
+  }
+  pop.append(
+    h(
+      'p',
+      'hint',
+      current
+        ? `Przypięta do: <b>${escapeHtml(baseName(current))}</b><br><span class="path">${escapeHtml(current)}</span>`
+        : 'Karteczka pokaże się sama obok pliku lub folderu, gdy go otworzysz, i schowa, gdy przejdziesz do innego okna.',
+    ),
+  );
+  const item = (ic: string, label: string, run: () => void) => {
+    const b = h('button', 'menu-item', `${icon(ic, 18)}<span>${escapeHtml(label)}</span>`);
+    b.onclick = () => {
+      pop.remove();
+      run();
+    };
+    pop.append(b);
+  };
+  const pick = async (directory: boolean) => {
+    const { open } = await import('@tauri-apps/plugin-dialog');
+    const path = await open({
+      directory,
+      multiple: false,
+      title: directory ? 'Wybierz folder, przy którym ma się pokazywać karteczka' : 'Wybierz plik, przy którym ma się pokazywać karteczka',
+    });
+    if (typeof path === 'string' && path) apply(path);
+  };
+  item('file', current ? 'Zmień na inny plik…' : 'Do pliku lub dokumentu…', () => void pick(false));
+  item('folder', current ? 'Zmień na inny folder…' : 'Do folderu…', () => void pick(true));
+  if (current) item('close', 'Odepnij', () => apply(null));
+}
+
 // ---------- edytor w oknie ----------
 
 function openEditor(n: Note, isNew: boolean): void {
@@ -427,6 +472,14 @@ function openEditor(n: Note, isNew: boolean): void {
     await pinToDesktop(ed.note);
     await close();
   });
+  add('clip', 'Przypnij do pliku lub folderu', b =>
+    attachMenu(b, ed.note.attach ?? null, path => {
+      ed.patch({ attach: path });
+      chipBox.replaceChildren(...(path ? [attachChip(path)] : []));
+      if (path && ed.base === 0) ed.markDirty();
+      toast(path ? 'Karteczka pokaże się sama, gdy otworzysz: ' + baseName(path) : 'Odpięto od pliku');
+    }),
+  );
   add(n.archived ? 'unarchive' : 'archive', n.archived ? 'Przywróć z archiwum' : 'Archiwizuj', async () => {
     if (ed.base === 0 && ed.isEmpty) return void close();
     const archived = !ed.note.archived;
@@ -447,7 +500,9 @@ function openEditor(n: Note, isNew: boolean): void {
   const done = h('button', 'btn ghost', 'Zamknij');
   done.onclick = () => void close();
   foot.append(tools, stamp, done);
-  modal.append(ed.el, foot);
+  const chipBox = h('div', 'modal-chip');
+  if (n.attach) chipBox.append(attachChip(n.attach));
+  modal.append(ed.el, chipBox, foot);
   backdrop.append(modal);
   document.body.append(backdrop);
   backdrop.addEventListener('mousedown', e => {
@@ -491,6 +546,10 @@ async function openSettings(): Promise<void> {
       <div class="row"><button class="btn" id="chooseDir">Zmień folder…</button><button class="btn ghost" id="openDir">Otwórz folder</button></div>
     </section>
     <section>
+      <h3>Kolor nowych notatek</h3>
+      <div class="palette-row" id="defColor"></div>
+    </section>
+    <section>
       <label class="switch"><input type="checkbox" id="autostart" ${auto ? 'checked' : ''}><span>Uruchamiaj Karteczki razem z Windows</span></label>
     </section>
     <section>
@@ -515,6 +574,27 @@ async function openSettings(): Promise<void> {
     if (e.target === backdrop) close();
   });
   modal.querySelector<HTMLButtonElement>('#closeSettings')!.onclick = close;
+  const row = modal.querySelector<HTMLElement>('#defColor')!;
+  const drawColors = () => {
+    row.replaceChildren(
+      ...COLORS.map(c => {
+        const b = h('button', `swatch c-${c.id}${c.id === info.defaultColor ? ' on' : ''}`);
+        b.title = c.name;
+        b.setAttribute('aria-label', c.name);
+        b.onclick = async () => {
+          try {
+            await api.setDefaultColor(c.id);
+            info.defaultColor = c.id;
+            drawColors();
+          } catch (e) {
+            toast('Nie udało się zapisać koloru: ' + errorText(e));
+          }
+        };
+        return b;
+      }),
+    );
+  };
+  drawColors();
   modal.querySelector<HTMLButtonElement>('#openDir')!.onclick = () => api.openDataDir().catch(e => toast(errorText(e)));
   modal.querySelector<HTMLButtonElement>('#openBackups')!.onclick = () => api.openBackupDir().catch(e => toast(errorText(e)));
   modal.querySelector<HTMLButtonElement>('#checkUpd')!.onclick = () => void checkUpdates(true);
@@ -594,3 +674,9 @@ async function checkUpdates(manual: boolean): Promise<void> {
     if (manual) toast('Nie udało się sprawdzić aktualizacji: ' + errorText(e));
   }
 }
+
+// Start dopiero na końcu pliku, gdy wszystkie zmienne modułu są już utworzone.
+guardLinks();
+const stickyMatch = /^#sticky=([A-Za-z0-9_-]+)$/.exec(location.hash);
+if (stickyMatch) void startSticky(stickyMatch[1]);
+else void startMain();

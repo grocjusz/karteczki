@@ -2,7 +2,7 @@ name: Budowa instalatora
 
 on:
   push:
-    branches: [main]
+    branches: [main, 'rozwoj/**']
   workflow_dispatch:
 
 permissions:
@@ -56,7 +56,7 @@ jobs:
           fi
 
       - name: Budowa i publikacja wydania
-        if: steps.ver.outputs.exists == 'false'
+        if: steps.ver.outputs.exists == 'false' && github.ref == 'refs/heads/main'
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -74,12 +74,12 @@ jobs:
 
             Aktualizacja: zainstaluj nową wersję na starą. Notatki zostają.
 
-      - name: Budowa kontrolna (wydanie tej wersji już istnieje)
-        if: steps.ver.outputs.exists == 'true'
+      - name: Budowa kontrolna (bez publikacji)
+        if: steps.ver.outputs.exists == 'true' || github.ref != 'refs/heads/main'
         run: npx tauri build --bundles nsis
 
       - name: Instalator jako artefakt
-        if: steps.ver.outputs.exists == 'true'
+        if: steps.ver.outputs.exists == 'true' || github.ref != 'refs/heads/main'
         uses: actions/upload-artifact@v4
         with:
           name: karteczki-instalator

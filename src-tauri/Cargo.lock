@@ -1966,7 +1966,7 @@ dependencies = [
 
 [[package]]
 name = "karteczki"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "chrono",
  "dirs 6.0.0",
@@ -1980,6 +1980,7 @@ dependencies = [
  "tauri-plugin-opener",
  "tauri-plugin-single-instance",
  "uuid",
+ "windows",
  "zip",
 ]
 

@@ -1,21 +1,24 @@
 // Karteczki — rdzeń aplikacji.
 // Każda notatka to osobny plik JSON w folderze danych (domyślnie OneDrive\Karteczki),
 // dzięki czemu OneDrive synchronizuje pojedyncze notatki, a dwa komputery mogą pracować jednocześnie.
-// Obrazki leżą w podfolderze `images`, a stan przypiętych karteczek (pozycja, „na wierzchu”)
+// Obrazki leżą w podfolderze `images`, a stan karteczek na pulpicie (pozycja, „na wierzchu”)
 // jest zapisywany lokalnie, bo układ pulpitu różni się między komputerami.
 
+mod attach;
 mod store;
 
+use attach::Geom;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use store::{Note, SaveResult};
-use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, State, WebviewUrl, WebviewWindowBuilder, WindowEvent};
+use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, State, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent};
 use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
 use tauri_plugin_opener::OpenerExt;
+
+const COLORS: [&str; 9] = ["default", "red", "orange", "yellow", "green", "teal", "blue", "purple", "pink"];
 
 #[derive(Serialize, Deserialize, Default, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -23,6 +26,9 @@ struct Settings {
     data_dir: Option<String>,
     #[serde(default)]
     first_run_done: bool,
+    /// Kolor, w którym startuje każda nowa notatka.
+    #[serde(default)]
+    default_color: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy)]
@@ -37,10 +43,19 @@ struct Sticky {
 
 struct AppState {
     settings: Mutex<Settings>,
+    /// Karteczki przypięte na pulpicie.
     stickies: Mutex<HashMap<String, Sticky>>,
     watcher: Mutex<Option<notify::RecommendedWatcher>>,
-    exiting: AtomicBool,
     last_sticky_write: Mutex<Instant>,
+    /// Notatki przypięte do pliku lub folderu: id → (ścieżka, czy folder).
+    attached: Mutex<HashMap<String, (String, bool)>>,
+    /// Położenie i rozmiar karteczek przy plikach.
+    attach_geom: Mutex<HashMap<String, Geom>>,
+    /// Karteczki przy plikach widoczne teraz: id → prostokąt okna dokumentu.
+    attach_shown: Mutex<HashMap<String, attach::Rect>>,
+    /// Karteczki zamknięte krzyżykiem: id → okno, przy którym je zamknięto (wrócą przy kolejnym otwarciu).
+    attach_dismissed: Mutex<HashMap<String, isize>>,
+    current_target: Mutex<isize>,
 }
 
 fn config_dir(app: &AppHandle) -> PathBuf {
@@ -78,14 +93,14 @@ fn data_dir(state: &AppState) -> PathBuf {
     s.data_dir.as_ref().map(PathBuf::from).unwrap_or_else(default_data_dir)
 }
 
-fn load_json<T: for<'de> Deserialize<'de> + Default>(path: &PathBuf) -> T {
+fn load_json<T: for<'de> Deserialize<'de> + Default>(path: &Path) -> T {
     std::fs::read(path)
         .ok()
         .and_then(|b| serde_json::from_slice(&b).ok())
         .unwrap_or_default()
 }
 
-fn save_json<T: Serialize>(path: &PathBuf, value: &T) {
+fn save_json<T: Serialize>(path: &Path, value: &T) {
     if let Ok(bytes) = serde_json::to_vec_pretty(value) {
         let _ = store::write_atomic(path, &bytes);
     }
@@ -99,6 +114,8 @@ fn save_settings(app: &AppHandle, state: &AppState) {
 fn save_stickies(app: &AppHandle, state: &AppState) {
     let s = state.stickies.lock().unwrap().clone();
     save_json(&config_dir(app).join("karteczki-na-pulpicie.json"), &s);
+    let g = state.attach_geom.lock().unwrap().clone();
+    save_json(&config_dir(app).join("karteczki-przy-plikach.json"), &g);
 }
 
 // ---------- polecenia dla interfejsu ----------
@@ -109,6 +126,9 @@ struct Info {
     data_dir: String,
     backup_dir: String,
     version: String,
+    default_color: String,
+    /// Czy ten system potrafi pokazywać karteczki przy plikach (tylko Windows).
+    attach_supported: bool,
 }
 
 #[tauri::command]
@@ -117,7 +137,19 @@ fn get_info(app: AppHandle, state: State<AppState>) -> Info {
         data_dir: data_dir(&state).to_string_lossy().into(),
         backup_dir: backup_dir(&app).to_string_lossy().into(),
         version: app.package_info().version.to_string(),
+        default_color: state.settings.lock().unwrap().default_color.clone().unwrap_or_else(|| "default".into()),
+        attach_supported: cfg!(windows),
     }
+}
+
+#[tauri::command]
+fn set_default_color(app: AppHandle, state: State<AppState>, color: String) -> Result<(), String> {
+    if !COLORS.contains(&color.as_str()) {
+        return Err("Nieznany kolor".into());
+    }
+    state.settings.lock().unwrap().default_color = Some(color);
+    save_settings(&app, &state);
+    Ok(())
 }
 
 #[tauri::command]
@@ -132,6 +164,7 @@ fn save_note(app: AppHandle, state: State<AppState>, note: Note, base_updated_at
     if let Some(c) = &result.conflict {
         let _ = app.emit("note-saved", c);
     }
+    refresh_attachments(&app);
     Ok(result)
 }
 
@@ -140,6 +173,7 @@ fn delete_note(app: AppHandle, state: State<AppState>, id: String) -> Result<(),
     store::delete(&data_dir(&state), &id).map_err(|e| e.to_string())?;
     close_sticky_window(&app, &id);
     let _ = app.emit("note-deleted", &id);
+    refresh_attachments(&app);
     Ok(())
 }
 
@@ -164,6 +198,7 @@ fn set_data_dir(app: AppHandle, state: State<AppState>, path: String) -> Result<
     state.settings.lock().unwrap().data_dir = Some(path);
     save_settings(&app, &state);
     start_watcher(&app);
+    refresh_attachments(&app);
     let _ = app.emit("notes-external", ());
     Ok(())
 }
@@ -186,9 +221,30 @@ fn sticky_label(id: &str) -> String {
     format!("note-{id}")
 }
 
+/// Okno karteczki bez ramki. Przesuwanie i zmianę rozmiaru obsługuje sama karteczka.
+fn build_sticky(app: &AppHandle, id: &str, visible: bool, on_top: bool, w: u32, h: u32) -> Result<WebviewWindow, String> {
+    WebviewWindowBuilder::new(app, sticky_label(id), WebviewUrl::App(format!("index.html#sticky={id}").into()))
+        .title("Karteczka")
+        .inner_size(w as f64, h as f64)
+        .min_inner_size(180.0, 140.0)
+        .resizable(true)
+        .decorations(false)
+        .always_on_top(on_top)
+        .skip_taskbar(true)
+        .visible(visible)
+        .focused(visible)
+        .disable_drag_drop_handler()
+        .build()
+        .map_err(|e| e.to_string())
+}
+
 fn open_sticky_window(app: &AppHandle, id: &str) -> Result<(), String> {
     if !store::valid_id(id) {
         return Err("Nieprawidłowy identyfikator".into());
+    }
+    let state = app.state::<AppState>();
+    if state.attached.lock().unwrap().contains_key(id) {
+        return Err("Ta notatka jest przypięta do pliku lub folderu i pokazuje się sama przy nim. Odepnij ją, aby przypiąć ją na pulpicie.".into());
     }
     let label = sticky_label(id);
     if let Some(w) = app.get_webview_window(&label) {
@@ -197,19 +253,9 @@ fn open_sticky_window(app: &AppHandle, id: &str) -> Result<(), String> {
         let _ = w.set_focus();
         return Ok(());
     }
-    let state = app.state::<AppState>();
     let saved = state.stickies.lock().unwrap().get(id).copied();
     let on_top = saved.map(|s| s.on_top).unwrap_or(false);
-    let window = WebviewWindowBuilder::new(app, &label, WebviewUrl::App(format!("index.html#sticky={id}").into()))
-        .title("Karteczka")
-        .inner_size(300.0, 300.0)
-        .min_inner_size(180.0, 140.0)
-        .decorations(false)
-        .always_on_top(on_top)
-        .skip_taskbar(true)
-        .disable_drag_drop_handler()
-        .build()
-        .map_err(|e| e.to_string())?;
+    let window = build_sticky(app, id, true, on_top, 300, 300)?;
     if let Some(s) = saved {
         let _ = window.set_size(PhysicalSize::new(s.w, s.h));
         let _ = window.set_position(PhysicalPosition::new(s.x, s.y));
@@ -228,6 +274,7 @@ fn open_sticky_window(app: &AppHandle, id: &str) -> Result<(), String> {
 fn close_sticky_window(app: &AppHandle, id: &str) {
     let state = app.state::<AppState>();
     state.stickies.lock().unwrap().remove(id);
+    state.attach_shown.lock().unwrap().remove(id);
     save_stickies(app, &state);
     if let Some(w) = app.get_webview_window(&sticky_label(id)) {
         let _ = w.destroy();
@@ -240,13 +287,16 @@ fn open_sticky(app: AppHandle, id: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn close_sticky(app: AppHandle, id: String) {
-    close_sticky_window(&app, &id);
+fn close_sticky(app: AppHandle, state: State<AppState>, id: String) {
+    if state.attached.lock().unwrap().contains_key(&id) {
+        dismiss_attached(app, state, id);
+    } else {
+        close_sticky_window(&app, &id);
+    }
 }
 
 #[tauri::command]
-fn sticky_on_top(app: AppHandle, state: State<AppState>, id: String) -> bool {
-    let _ = &app;
+fn sticky_on_top(state: State<AppState>, id: String) -> bool {
     state.stickies.lock().unwrap().get(&id).map(|s| s.on_top).unwrap_or(false)
 }
 
@@ -279,6 +329,130 @@ fn is_sticky_open(app: AppHandle, id: String) -> bool {
     app.get_webview_window(&sticky_label(&id)).is_some()
 }
 
+/// Krzyżyk na karteczce przy pliku: chowa ją do czasu, aż plik zostanie otwarty ponownie.
+#[tauri::command]
+fn dismiss_attached(app: AppHandle, state: State<AppState>, id: String) {
+    let target = *state.current_target.lock().unwrap();
+    state.attach_dismissed.lock().unwrap().insert(id.clone(), target);
+    state.attach_shown.lock().unwrap().remove(&id);
+    if let Some(w) = app.get_webview_window(&sticky_label(&id)) {
+        let _ = w.hide();
+    }
+}
+
+// ---------- karteczki przy plikach i folderach ----------
+
+/// Odświeża listę notatek przypiętych do plików (po zapisie, usunięciu i zmianach z OneDrive).
+fn refresh_attachments(app: &AppHandle) {
+    let state = app.state::<AppState>();
+    let mut fresh: HashMap<String, (String, bool)> = HashMap::new();
+    for n in store::list(&data_dir(&state)).unwrap_or_default() {
+        let Some(path) = n.attach.filter(|p| !p.trim().is_empty()) else { continue };
+        if n.trashed_at.is_some() || n.archived {
+            continue;
+        }
+        let is_dir = Path::new(&path).is_dir();
+        fresh.insert(n.id, (path, is_dir));
+    }
+    let old = std::mem::replace(&mut *state.attached.lock().unwrap(), fresh.clone());
+    // Odpięte — zamykamy ich ukryte okna.
+    for id in old.keys().filter(|id| !fresh.contains_key(*id)) {
+        state.attach_shown.lock().unwrap().remove(id);
+        if !state.stickies.lock().unwrap().contains_key(id) {
+            if let Some(w) = app.get_webview_window(&sticky_label(id)) {
+                let _ = w.destroy();
+            }
+        }
+    }
+    // Nowo przypięte do pliku — zdejmujemy je z pulpitu.
+    for id in fresh.keys() {
+        let on_desktop = state.stickies.lock().unwrap().contains_key(id);
+        if on_desktop {
+            close_sticky_window(app, id);
+        }
+    }
+}
+
+#[cfg(windows)]
+fn show_attached(app: &AppHandle, id: &str, rect: attach::Rect) {
+    let state = app.state::<AppState>();
+    let stored = state.attach_geom.lock().unwrap().get(id).copied();
+    let window = match app.get_webview_window(&sticky_label(id)) {
+        Some(w) => w,
+        None => match build_sticky(app, id, false, true, 300, 260) {
+            Ok(w) => w,
+            Err(_) => return,
+        },
+    };
+    // Domyślny rozmiar w pikselach ekranu zależy od skalowania Windows (np. 150%).
+    let geom = stored.unwrap_or_else(|| {
+        let s = window.scale_factor().unwrap_or(1.0);
+        let d = Geom::default();
+        Geom { right: (d.right as f64 * s) as i32, top: (d.top as f64 * s) as i32, w: (d.w as f64 * s) as u32, h: (d.h as f64 * s) as u32 }
+    });
+    state.attach_shown.lock().unwrap().insert(id.to_string(), rect);
+    let (x, y) = attach::place(rect, geom);
+    let _ = window.set_size(PhysicalSize::new(geom.w, geom.h));
+    let _ = window.set_position(PhysicalPosition::new(x, y));
+    let _ = window.set_always_on_top(true);
+    if let Ok(hwnd) = window.hwnd() {
+        attach::win::show_no_activate(hwnd);
+    } else {
+        let _ = window.show();
+    }
+}
+
+#[cfg(windows)]
+fn spawn_attach_loop(app: AppHandle) {
+    std::thread::spawn(move || {
+        attach::win::init_com();
+        let my_pid = std::process::id();
+        let mut last = attach::Target::default();
+        loop {
+            std::thread::sleep(Duration::from_millis(350));
+            let state = app.state::<AppState>();
+            let attached = state.attached.lock().unwrap().clone();
+            if attached.is_empty() {
+                continue;
+            }
+            let Some((hwnd, pid)) = attach::win::foreground() else { continue };
+            // Kliknięcie w karteczkę lub okno Karteczek niczego nie zmienia.
+            if pid == my_pid {
+                continue;
+            }
+            let (title, class, rect) = attach::win::describe(hwnd);
+            if hwnd != last.hwnd || title != last.title {
+                let folder = if class == attach::EXPLORER_CLASS { attach::win::explorer_folder(hwnd, &title) } else { None };
+                last = attach::Target { hwnd, title, class, folder, rect };
+            } else {
+                last.rect = rect;
+            }
+            *state.current_target.lock().unwrap() = hwnd;
+            state.attach_dismissed.lock().unwrap().retain(|_, h| *h == hwnd);
+            let dismissed = state.attach_dismissed.lock().unwrap().clone();
+            for (id, (path, is_dir)) in &attached {
+                let want = !dismissed.contains_key(id) && attach::matches(path, *is_dir, &last);
+                let shown = state.attach_shown.lock().unwrap().get(id).copied();
+                match (want, shown) {
+                    (true, None) => show_attached(&app, id, last.rect),
+                    // Okno dokumentu przesunięte — karteczka idzie za nim.
+                    (true, Some(r)) if r != last.rect => show_attached(&app, id, last.rect),
+                    (false, Some(_)) => {
+                        state.attach_shown.lock().unwrap().remove(id);
+                        if let Some(w) = app.get_webview_window(&sticky_label(id)) {
+                            let _ = w.hide();
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+    });
+}
+
+#[cfg(not(windows))]
+fn spawn_attach_loop(_app: AppHandle) {}
+
 // ---------- obserwacja folderu, kopie, kosz ----------
 
 fn start_watcher(app: &AppHandle) {
@@ -304,6 +478,7 @@ fn start_watcher(app: &AppHandle) {
         // Zbieramy serię zdarzeń (zapis, zmiana nazwy, synchronizacja) w jedno odświeżenie.
         while rx.recv().is_ok() {
             while rx.recv_timeout(Duration::from_millis(400)).is_ok() {}
+            refresh_attachments(&handle);
             let _ = handle.emit("notes-external", ());
         }
     });
@@ -314,6 +489,15 @@ fn housekeeping(app: &AppHandle) {
     let dir = data_dir(&state);
     let _ = store::purge_trash(&dir, chrono::Utc::now().timestamp_millis(), 30);
     let _ = store::daily_backup(&dir, &backup_dir(app), &chrono::Local::now().format("%Y-%m-%d").to_string(), 14);
+}
+
+fn persist_soon(app: &AppHandle, state: &AppState) {
+    let mut last = state.last_sticky_write.lock().unwrap();
+    if last.elapsed() > Duration::from_millis(500) {
+        *last = Instant::now();
+        drop(last);
+        save_stickies(app, state);
+    }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -345,12 +529,17 @@ pub fn run() {
             let handle = app.handle().clone();
             let settings: Settings = load_json(&config_dir(&handle).join("settings.json"));
             let stickies: HashMap<String, Sticky> = load_json(&config_dir(&handle).join("karteczki-na-pulpicie.json"));
+            let geom: HashMap<String, Geom> = load_json(&config_dir(&handle).join("karteczki-przy-plikach.json"));
             app.manage(AppState {
                 settings: Mutex::new(settings),
                 stickies: Mutex::new(stickies),
                 watcher: Mutex::new(None),
-                exiting: AtomicBool::new(false),
                 last_sticky_write: Mutex::new(Instant::now()),
+                attached: Mutex::new(HashMap::new()),
+                attach_geom: Mutex::new(geom),
+                attach_shown: Mutex::new(HashMap::new()),
+                attach_dismissed: Mutex::new(HashMap::new()),
+                current_target: Mutex::new(0),
             });
             let state = handle.state::<AppState>();
             let _ = std::fs::create_dir_all(data_dir(&state).join("notes"));
@@ -370,6 +559,7 @@ pub fn run() {
                 }
             }
 
+            refresh_attachments(&handle);
             let ids: Vec<String> = state.stickies.lock().unwrap().keys().cloned().collect();
             let existing = store::list(&data_dir(&state)).unwrap_or_default();
             for id in ids {
@@ -383,6 +573,7 @@ pub fn run() {
             save_stickies(&handle, &state);
 
             start_watcher(&handle);
+            spawn_attach_loop(handle.clone());
             let h = handle.clone();
             std::thread::spawn(move || loop {
                 housekeeping(&h);
@@ -396,14 +587,14 @@ pub fn run() {
             let label = window.label().to_string();
             if label == "main" {
                 if let WindowEvent::CloseRequested { .. } = event {
-                    // Zamknięcie głównego okna kończy aplikację; przypięte karteczki wrócą przy następnym starcie.
-                    state.exiting.store(true, Ordering::SeqCst);
+                    // Zamknięcie głównego okna kończy aplikację; karteczki z pulpitu wrócą przy następnym starcie.
                     save_stickies(app, &state);
                     app.exit(0);
                 }
                 return;
             }
             let Some(id) = label.strip_prefix("note-").map(str::to_string) else { return };
+            let attached_rect = state.attach_shown.lock().unwrap().get(&id).copied();
             match event {
                 WindowEvent::Moved(pos) => {
                     // Okno zminimalizowane w Windows ma pozycję (-32000, -32000) — nie zapisujemy jej.
@@ -413,14 +604,25 @@ pub fn run() {
                     if let Some(s) = state.stickies.lock().unwrap().get_mut(&id) {
                         s.x = pos.x;
                         s.y = pos.y;
+                    } else if let Some((_, t, r, _)) = attached_rect {
+                        let mut g = state.attach_geom.lock().unwrap();
+                        let e = g.entry(id).or_default();
+                        e.right = r - pos.x;
+                        e.top = pos.y - t;
                     }
                 }
                 WindowEvent::Resized(size) => {
-                    if size.width > 0 && size.height > 0 {
-                        if let Some(s) = state.stickies.lock().unwrap().get_mut(&id) {
-                            s.w = size.width;
-                            s.h = size.height;
-                        }
+                    if size.width == 0 || size.height == 0 {
+                        return;
+                    }
+                    if let Some(s) = state.stickies.lock().unwrap().get_mut(&id) {
+                        s.w = size.width;
+                        s.h = size.height;
+                    } else if attached_rect.is_some() {
+                        let mut g = state.attach_geom.lock().unwrap();
+                        let e = g.entry(id).or_default();
+                        e.w = size.width;
+                        e.h = size.height;
                     }
                 }
                 WindowEvent::Focused(false) => {
@@ -429,15 +631,11 @@ pub fn run() {
                 }
                 _ => return,
             }
-            let mut last = state.last_sticky_write.lock().unwrap();
-            if last.elapsed() > Duration::from_millis(500) {
-                *last = Instant::now();
-                drop(last);
-                save_stickies(app, &state);
-            }
+            persist_soon(app, &state);
         })
         .invoke_handler(tauri::generate_handler![
             get_info,
+            set_default_color,
             list_notes,
             save_note,
             delete_note,
@@ -450,7 +648,8 @@ pub fn run() {
             sticky_on_top,
             set_sticky_on_top,
             show_main,
-            is_sticky_open
+            is_sticky_open,
+            dismiss_attached
         ])
         .build(tauri::generate_context!())
         .expect("nie udało się uruchomić Karteczek")
