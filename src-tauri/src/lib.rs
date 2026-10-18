@@ -337,6 +337,14 @@ fn is_sticky_open(app: AppHandle, id: String) -> bool {
     app.get_webview_window(&sticky_label(&id)).is_some()
 }
 
+/// Całkowite zamknięcie Karteczek (przycisk w Ustawieniach).
+#[tauri::command]
+async fn quit_app(app: AppHandle) {
+    let state = app.state::<AppState>();
+    save_stickies(&app, &state);
+    app.exit(0);
+}
+
 /// Krzyżyk na karteczce przy pliku: chowa ją do czasu, aż plik zostanie otwarty ponownie.
 #[tauri::command]
 async fn dismiss_attached(app: AppHandle, id: String) {
@@ -623,9 +631,11 @@ pub fn run() {
                 save_settings(&handle, &state);
             }
 
-            if std::env::args().any(|a| a == "--autostart") {
+            // Przy starcie z Windows okno główne zostaje schowane — Karteczki pracują w tle.
+            if !std::env::args().any(|a| a == "--autostart") {
                 if let Some(w) = handle.get_webview_window("main") {
-                    let _ = w.minimize();
+                    let _ = w.show();
+                    let _ = w.set_focus();
                 }
             }
 
@@ -656,10 +666,12 @@ pub fn run() {
             let state = app.state::<AppState>();
             let label = window.label().to_string();
             if label == "main" {
-                if let WindowEvent::CloseRequested { .. } = event {
-                    // Zamknięcie głównego okna kończy aplikację; karteczki z pulpitu wrócą przy następnym starcie.
+                if let WindowEvent::CloseRequested { api, .. } = event {
+                    // Krzyżyk tylko chowa okno — Karteczki działają dalej w tle, żeby karteczki na pulpicie
+                    // i przy plikach nadal się pokazywały. Okno wraca po kliknięciu ikony Karteczek.
+                    api.prevent_close();
+                    let _ = window.hide();
                     save_stickies(app, &state);
-                    app.exit(0);
                 }
                 return;
             }
@@ -720,7 +732,8 @@ pub fn run() {
             show_main,
             is_sticky_open,
             dismiss_attached,
-            get_attach_log
+            get_attach_log,
+            quit_app
         ])
         .build(tauri::generate_context!())
         .expect("nie udało się uruchomić Karteczek")

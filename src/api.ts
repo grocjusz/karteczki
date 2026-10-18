@@ -31,6 +31,7 @@ export const api = {
   setDefaultColor: (color: string) => invoke<void>('set_default_color', { color }),
   dismissAttached: (id: string) => invoke<void>('dismiss_attached', { id }),
   attachLog: () => invoke<string[]>('get_attach_log'),
+  quit: () => invoke<void>('quit_app'),
   showMain: (id?: string) => invoke<void>('show_main', { id: id ?? null }),
 };
 

@@ -136,3 +136,51 @@ jobs:
           $out += "proces żyje: $(-not $p.HasExited)`n"
           $out = $out.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
           Write-Output "::notice title=app2::$out"
+      - name: Test pracy w tle (zamknięcie okna krzyżykiem)
+        if: always()
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          Get-Process karteczki -ErrorAction SilentlyContinue | Stop-Process -Force
+          Start-Sleep 2
+          $data = "C:\KarteczkiData"
+          Remove-Item "$data\notes\*" -Force -ErrorAction SilentlyContinue
+          $cfg = Join-Path $env:APPDATA "pl.grocjusz.karteczki"
+          '{}' | Set-Content -Encoding utf8 "$cfg\karteczki-na-pulpicie.json"
+          $dir = "C:\KarteczkiTest\Tlo"
+          New-Item -ItemType Directory -Force $dir | Out-Null
+          $n = @{ id = "tlo"; title = "tlo"; html = "<p>tlo</p>"; color = "yellow"; archived = $false; trashedAt = $null; createdAt = 1; updatedAt = 2; attach = $dir }
+          $n | ConvertTo-Json | Set-Content -Encoding utf8 "$data\notes\tlo.json"
+          Add-Type @"
+          using System; using System.Text; using System.Runtime.InteropServices;
+          public static class W3 {
+            public delegate bool P(IntPtr h, IntPtr l);
+            [DllImport("user32.dll")] public static extern bool EnumWindows(P f, IntPtr l);
+            [DllImport("user32.dll")] public static extern int GetWindowThreadProcessId(IntPtr h, out int pid);
+            [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
+            [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetWindowText(IntPtr h, StringBuilder s, int n);
+            [DllImport("user32.dll")] public static extern IntPtr PostMessage(IntPtr h, uint m, IntPtr w, IntPtr l);
+            public static IntPtr Find(int pid, string title) { IntPtr found = IntPtr.Zero;
+              EnumWindows((h, l) => { int p; GetWindowThreadProcessId(h, out p); var t = new StringBuilder(256); GetWindowText(h, t, 256); if (p == pid && t.ToString() == title) { found = h; return false; } return true; }, IntPtr.Zero); return found; }
+            public static string State(int pid) { var sb = new StringBuilder();
+              EnumWindows((h, l) => { int p; GetWindowThreadProcessId(h, out p); var t = new StringBuilder(256); GetWindowText(h, t, 256); var s = t.ToString();
+                if (p == pid && (s == "Karteczki" || s == "Karteczka")) sb.AppendFormat("  '{0}' widoczne={1}\n", s, IsWindowVisible(h)); return true; }, IntPtr.Zero); return sb.ToString(); }
+          }
+          "@
+          $exe = "src-tauri\target\debug\karteczki.exe"
+          $p = Start-Process $exe -PassThru
+          Start-Sleep 10
+          $out = "1) po starcie:`n$([W3]::State($p.Id))"
+          $main = [W3]::Find($p.Id, "Karteczki")
+          [W3]::PostMessage($main, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero) | Out-Null
+          Start-Sleep 3
+          $out += "2) po krzyżyku (WM_CLOSE): proces żyje=$(-not $p.HasExited)`n$([W3]::State($p.Id))"
+          Start-Process explorer.exe $dir
+          Start-Sleep 7
+          $out += "3) po otwarciu folderu:`n$([W3]::State($p.Id))"
+          Start-Process $exe
+          Start-Sleep 5
+          $out += "4) po ponownym kliknięciu ikony: procesów karteczki=$((Get-Process karteczki).Count)`n$([W3]::State($p.Id))"
+          $p2 = Start-Process $exe -ArgumentList "--autostart" -PassThru
+          $out = $out.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+          Write-Output "::notice title=tlo::$out"

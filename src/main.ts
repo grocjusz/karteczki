@@ -550,6 +550,11 @@ async function openSettings(): Promise<void> {
       <div class="palette-row" id="defColor"></div>
     </section>
     <section>
+      <h3>Praca w tle</h3>
+      <p class="hint">Zamknięcie okna krzyżykiem tylko je chowa — Karteczki działają dalej, więc karteczki na pulpicie i przy plikach nadal się pokazują. Okno otworzysz ponownie, klikając ikonę Karteczek na pasku zadań lub w menu Start.</p>
+      <div class="row"><button class="btn ghost" id="quitApp">Zakończ Karteczki całkowicie</button></div>
+    </section>
+    <section>
       <label class="switch"><input type="checkbox" id="autostart" ${auto ? 'checked' : ''}><span>Uruchamiaj Karteczki razem z Windows</span></label>
     </section>
     <section id="attachSec">
@@ -611,6 +616,19 @@ async function openSettings(): Promise<void> {
     pre.textContent = lines.length
       ? lines.join('\n')
       : 'Nic jeszcze nie sprawdzono. Okna są sprawdzane tylko wtedy, gdy co najmniej jedna notatka jest przypięta do pliku lub folderu.';
+  };
+  modal.querySelector<HTMLButtonElement>('#quitApp')!.onclick = async () => {
+    const { ask } = await import('@tauri-apps/plugin-dialog');
+    const ok = await ask('Zamknąć Karteczki całkowicie? Karteczki na pulpicie i przy plikach przestaną się pokazywać do następnego uruchomienia.', {
+      title: 'Karteczki',
+      kind: 'warning',
+      okLabel: 'Zakończ',
+      cancelLabel: 'Anuluj',
+    });
+    if (ok) {
+      if (closeEditor) await closeEditor();
+      await api.quit();
+    }
   };
   modal.querySelector<HTMLButtonElement>('#checkUpd')!.onclick = () => void checkUpdates(true);
   modal.querySelector<HTMLInputElement>('#autostart')!.onchange = async ev => {
