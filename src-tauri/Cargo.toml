@@ -1,6 +1,6 @@
 [package]
 name = "karteczki"
-version = "1.1.0"
+version = "1.1.1"
 description = "Karteczki — szybkie notatki na pulpicie Windows"
 authors = ["grocjusz"]
 edition = "2021"

@@ -157,8 +157,11 @@ fn list_notes(state: State<AppState>) -> Result<Vec<Note>, String> {
     store::list(&data_dir(&state)).map_err(|e| e.to_string())
 }
 
+// Polecenia, które tworzą, pokazują lub zamykają okna, są asynchroniczne: w Windows
+// tworzenie okna w zwykłym (synchronicznym) poleceniu zawiesza aplikację.
 #[tauri::command]
-fn save_note(app: AppHandle, state: State<AppState>, note: Note, base_updated_at: i64) -> Result<SaveResult, String> {
+async fn save_note(app: AppHandle, note: Note, base_updated_at: i64) -> Result<SaveResult, String> {
+    let state = app.state::<AppState>();
     let result = store::save(&data_dir(&state), note, base_updated_at).map_err(|e| e.to_string())?;
     let _ = app.emit("note-saved", &result.note);
     if let Some(c) = &result.conflict {
@@ -169,7 +172,8 @@ fn save_note(app: AppHandle, state: State<AppState>, note: Note, base_updated_at
 }
 
 #[tauri::command]
-fn delete_note(app: AppHandle, state: State<AppState>, id: String) -> Result<(), String> {
+async fn delete_note(app: AppHandle, id: String) -> Result<(), String> {
+    let state = app.state::<AppState>();
     store::delete(&data_dir(&state), &id).map_err(|e| e.to_string())?;
     close_sticky_window(&app, &id);
     let _ = app.emit("note-deleted", &id);
@@ -192,7 +196,8 @@ fn save_image(state: State<AppState>, request: tauri::ipc::Request<'_>) -> Resul
 }
 
 #[tauri::command]
-fn set_data_dir(app: AppHandle, state: State<AppState>, path: String) -> Result<(), String> {
+async fn set_data_dir(app: AppHandle, path: String) -> Result<(), String> {
+    let state = app.state::<AppState>();
     let p = PathBuf::from(&path);
     std::fs::create_dir_all(p.join("notes")).map_err(|e| e.to_string())?;
     state.settings.lock().unwrap().data_dir = Some(path);
@@ -282,14 +287,15 @@ fn close_sticky_window(app: &AppHandle, id: &str) {
 }
 
 #[tauri::command]
-fn open_sticky(app: AppHandle, id: String) -> Result<(), String> {
+async fn open_sticky(app: AppHandle, id: String) -> Result<(), String> {
     open_sticky_window(&app, &id)
 }
 
 #[tauri::command]
-fn close_sticky(app: AppHandle, state: State<AppState>, id: String) {
-    if state.attached.lock().unwrap().contains_key(&id) {
-        dismiss_attached(app, state, id);
+async fn close_sticky(app: AppHandle, id: String) {
+    let is_attached = app.state::<AppState>().attached.lock().unwrap().contains_key(&id);
+    if is_attached {
+        dismiss(&app, &id);
     } else {
         close_sticky_window(&app, &id);
     }
@@ -301,7 +307,8 @@ fn sticky_on_top(state: State<AppState>, id: String) -> bool {
 }
 
 #[tauri::command]
-fn set_sticky_on_top(app: AppHandle, state: State<AppState>, id: String, on_top: bool) -> Result<(), String> {
+async fn set_sticky_on_top(app: AppHandle, id: String, on_top: bool) -> Result<(), String> {
+    let state = app.state::<AppState>();
     if let Some(w) = app.get_webview_window(&sticky_label(&id)) {
         w.set_always_on_top(on_top).map_err(|e| e.to_string())?;
     }
@@ -313,7 +320,7 @@ fn set_sticky_on_top(app: AppHandle, state: State<AppState>, id: String, on_top:
 }
 
 #[tauri::command]
-fn show_main(app: AppHandle, id: Option<String>) {
+async fn show_main(app: AppHandle, id: Option<String>) {
     if let Some(w) = app.get_webview_window("main") {
         let _ = w.unminimize();
         let _ = w.show();
@@ -331,7 +338,13 @@ fn is_sticky_open(app: AppHandle, id: String) -> bool {
 
 /// Krzyżyk na karteczce przy pliku: chowa ją do czasu, aż plik zostanie otwarty ponownie.
 #[tauri::command]
-fn dismiss_attached(app: AppHandle, state: State<AppState>, id: String) {
+async fn dismiss_attached(app: AppHandle, id: String) {
+    dismiss(&app, &id);
+}
+
+fn dismiss(app: &AppHandle, id: &str) {
+    let state = app.state::<AppState>();
+    let id = id.to_string();
     let target = *state.current_target.lock().unwrap();
     state.attach_dismissed.lock().unwrap().insert(id.clone(), target);
     state.attach_shown.lock().unwrap().remove(&id);
