@@ -185,9 +185,9 @@ fn get_info(app: AppHandle, state: State<AppState>) -> Info {
     Info {
         data_dir: data,
         backup_dir: backups,
-        backup_custom: settings.backup_dir.is_some(),
+        backup_custom: state.settings.lock().unwrap().backup_dir.is_some(),
+        default_color: state.settings.lock().unwrap().default_color.clone().unwrap_or_else(|| "default".into()),
         version: app.package_info().version.to_string(),
-        default_color: settings.default_color.unwrap_or_else(|| "default".into()),
         attach_supported: cfg!(windows),
     }
 }
