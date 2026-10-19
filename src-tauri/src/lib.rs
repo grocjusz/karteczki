@@ -45,6 +45,15 @@ struct Sticky {
     on_top: bool,
 }
 
+/// Karteczka przy pliku widoczna teraz: przy którym oknie (i z jakim tytułem) się pokazała.
+#[derive(Clone, PartialEq)]
+#[cfg_attr(not(windows), allow(dead_code))]
+struct Shown {
+    rect: attach::Rect,
+    target: isize,
+    title: String,
+}
+
 struct AppState {
     settings: Mutex<Settings>,
     /// Karteczki przypięte na pulpicie.
@@ -56,7 +65,7 @@ struct AppState {
     /// Położenie i rozmiar karteczek przy plikach.
     attach_geom: Mutex<HashMap<String, Geom>>,
     /// Karteczki przy plikach widoczne teraz: id → prostokąt okna dokumentu.
-    attach_shown: Mutex<HashMap<String, attach::Rect>>,
+    attach_shown: Mutex<HashMap<String, Shown>>,
     /// Karteczki zamknięte krzyżykiem: id → okno, przy którym je zamknięto (wrócą przy kolejnym otwarciu).
     attach_dismissed: Mutex<HashMap<String, isize>>,
     current_target: Mutex<isize>,
@@ -479,7 +488,8 @@ fn refresh_attachments(app: &AppHandle) {
 }
 
 #[cfg(windows)]
-fn show_attached(app: &AppHandle, id: &str, rect: attach::Rect) {
+fn show_attached(app: &AppHandle, id: &str, target: &attach::Target) {
+    let rect = target.rect;
     let state = app.state::<AppState>();
     let stored = state.attach_geom.lock().unwrap().get(id).copied();
     let window = match app.get_webview_window(&sticky_label(id)) {
@@ -495,7 +505,11 @@ fn show_attached(app: &AppHandle, id: &str, rect: attach::Rect) {
         let d = Geom::default();
         Geom { right: (d.right as f64 * s) as i32, top: (d.top as f64 * s) as i32, w: (d.w as f64 * s) as u32, h: (d.h as f64 * s) as u32 }
     });
-    state.attach_shown.lock().unwrap().insert(id.to_string(), rect);
+    state
+        .attach_shown
+        .lock()
+        .unwrap()
+        .insert(id.to_string(), Shown { rect, target: target.hwnd, title: target.title.clone() });
     let (x, y) = attach::place(rect, geom);
     let _ = window.set_size(PhysicalSize::new(geom.w, geom.h));
     let _ = window.set_position(PhysicalPosition::new(x, y));
@@ -519,6 +533,18 @@ fn spawn_attach_loop(app: AppHandle) {
             let attached = state.attached.lock().unwrap().clone();
             if attached.is_empty() {
                 continue;
+            }
+            // Plik lub folder zamknięty (albo zminimalizowany) — jego karteczki znikają od razu,
+            // także wtedy, gdy Windows przeniósł fokus na samą karteczkę.
+            let shown_now = state.attach_shown.lock().unwrap().clone();
+            for (id, sh) in shown_now {
+                let Some((path, is_dir)) = attached.get(&id) else { continue };
+                if !still_shows(sh.target, &sh.title, path, *is_dir) {
+                    state.attach_shown.lock().unwrap().remove(&id);
+                    if let Some(w) = app.get_webview_window(&sticky_label(&id)) {
+                        hide_window(&w);
+                    }
+                }
             }
             let Some((hwnd, pid)) = attach::win::foreground() else { continue };
             // Kliknięcie w karteczkę lub okno Karteczek niczego nie zmienia.
@@ -555,9 +581,9 @@ fn spawn_attach_loop(app: AppHandle) {
             let dismissed = state.attach_dismissed.lock().unwrap().clone();
             for (id, (path, is_dir)) in &attached {
                 let want = !dismissed.contains_key(id) && attach::matches(path, *is_dir, &last);
-                let shown = state.attach_shown.lock().unwrap().get(id).copied();
+                let shown = state.attach_shown.lock().unwrap().get(id).map(|s| s.rect);
                 match (want, shown) {
-                    (true, None) => show_attached(&app, id, last.rect),
+                    (true, None) => show_attached(&app, id, &last),
                     (true, Some(r)) => {
                         // Okno dokumentu przesunięte albo karteczka zniknęła (np. zamknięta z pulpitu) — pokazujemy ponownie.
                         let visible = app
@@ -565,7 +591,7 @@ fn spawn_attach_loop(app: AppHandle) {
                             .and_then(|w| w.is_visible().ok())
                             .unwrap_or(false);
                         if r != last.rect || !visible {
-                            show_attached(&app, id, last.rect);
+                            show_attached(&app, id, &last);
                         }
                     }
                     (false, Some(_)) => {
@@ -579,6 +605,24 @@ fn spawn_attach_loop(app: AppHandle) {
             }
         }
     });
+}
+
+/// Czy okno, przy którym pokazała się karteczka, nadal pokazuje przypięty plik lub folder.
+#[cfg(windows)]
+fn still_shows(target: isize, title_then: &str, path: &str, is_dir: bool) -> bool {
+    if !attach::win::alive(target) {
+        return false;
+    }
+    let (title, class, rect) = attach::win::describe(target);
+    if title == title_then {
+        return true;
+    }
+    let folder = if class == attach::EXPLORER_CLASS {
+        attach::win::explorer_folder(target, &title).map(|f| attach::canonical(&f))
+    } else {
+        None
+    };
+    attach::matches(path, is_dir, &attach::Target { hwnd: target, title, class, folder, rect })
 }
 
 #[cfg(not(windows))]
@@ -775,7 +819,7 @@ pub fn run() {
                 return;
             }
             let Some(id) = label.strip_prefix("note-").map(str::to_string) else { return };
-            let attached_rect = state.attach_shown.lock().unwrap().get(&id).copied();
+            let attached_rect = state.attach_shown.lock().unwrap().get(&id).map(|s| s.rect);
             match event {
                 WindowEvent::Moved(pos) => {
                     // Okno zminimalizowane w Windows ma pozycję (-32000, -32000) — nie zapisujemy jej.

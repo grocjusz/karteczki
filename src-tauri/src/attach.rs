@@ -161,7 +161,7 @@ pub mod win {
     use windows::Win32::System::Variant::{VARIANT, VT_I4};
     use windows::Win32::UI::Shell::{IShellBrowser, IShellWindows, IWebBrowser2, ShellWindows, SID_STopLevelBrowser};
     use windows::Win32::UI::WindowsAndMessaging::{
-        FindWindowExW, GetClassNameW, GetForegroundWindow, GetWindowRect, GetWindowTextW, GetWindowThreadProcessId, ShowWindow,
+        FindWindowExW, GetClassNameW, GetForegroundWindow, IsIconic, IsWindow, IsWindowVisible, GetWindowRect, GetWindowTextW, GetWindowThreadProcessId, ShowWindow,
         SW_HIDE, SW_SHOWNOACTIVATE,
     };
 
@@ -273,6 +273,12 @@ pub mod win {
                 !name.is_empty() && (name == main || title.starts_with(&name))
             })
             .max_by_key(|p| last_segment(p).len())
+    }
+
+    /// Czy okno nadal istnieje, jest widoczne i nie jest zminimalizowane.
+    pub fn alive(hwnd: isize) -> bool {
+        let h = HWND(hwnd as *mut core::ffi::c_void);
+        unsafe { IsWindow(Some(h)).as_bool() && IsWindowVisible(h).as_bool() && !IsIconic(h).as_bool() }
     }
 
     /// Chowa okno (bezpośrednio w Windows — tak samo, jak je pokazujemy).

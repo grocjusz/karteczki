@@ -220,3 +220,75 @@ jobs:
           $out += "plik wysłanych: $(Get-Content "$cfg\przypomnienia-wyslane.json" -Raw -ErrorAction SilentlyContinue)`n"
           $out = $out.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
           Write-Output "::notice title=przypomnienie::$out"
+      - name: Test zamykania karteczek razem z plikiem i folderem
+        if: always()
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          Get-Process karteczki, notepad -ErrorAction SilentlyContinue | Stop-Process -Force
+          Start-Sleep 2
+          $data = "C:\KarteczkiData"
+          Remove-Item "$data\notes\*" -Force -ErrorAction SilentlyContinue
+          $cfg = Join-Path $env:APPDATA "pl.grocjusz.karteczki"
+          '{}' | Set-Content -Encoding utf8 "$cfg\karteczki-na-pulpicie.json"
+          $dir = "C:\KarteczkiTest\Zamykanie"
+          New-Item -ItemType Directory -Force $dir | Out-Null
+          $file = "C:\KarteczkiTest\umowa-testowa.txt"
+          "tekst" | Set-Content $file
+          function Note($id, $attach) {
+            $n = @{ id = $id; title = $id; html = "<p>$id</p>"; color = "yellow"; archived = $false; trashedAt = $null; createdAt = 1; updatedAt = 2; attach = $attach }
+            $n | ConvertTo-Json | Set-Content -Encoding utf8 "$data\notes\$id.json"
+          }
+          Note "folder" $dir
+          Note "plik" $file
+          Add-Type @"
+          using System; using System.Text; using System.Runtime.InteropServices;
+          public static class W5 {
+            public delegate bool P(IntPtr h, IntPtr l);
+            [DllImport("user32.dll")] public static extern bool EnumWindows(P f, IntPtr l);
+            [DllImport("user32.dll")] public static extern int GetWindowThreadProcessId(IntPtr h, out int pid);
+            [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
+            [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
+            [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int c);
+            [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+            [DllImport("user32.dll")] public static extern IntPtr PostMessage(IntPtr h, uint m, IntPtr w, IntPtr l);
+            [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetWindowText(IntPtr h, StringBuilder s, int n);
+            public static IntPtr Find(string part) { IntPtr found = IntPtr.Zero;
+              EnumWindows((h, l) => { var t = new StringBuilder(256); GetWindowText(h, t, 256); if (IsWindowVisible(h) && t.ToString().Contains(part)) { found = h; return false; } return true; }, IntPtr.Zero); return found; }
+            public static IntPtr Sticky(int pid) { IntPtr found = IntPtr.Zero;
+              EnumWindows((h, l) => { int p; GetWindowThreadProcessId(h, out p); var t = new StringBuilder(64); GetWindowText(h, t, 64); if (p == pid && t.ToString() == "Karteczka" && IsWindowVisible(h)) { found = h; return false; } return true; }, IntPtr.Zero); return found; }
+            public static int Count(int pid) { int n = 0;
+              EnumWindows((h, l) => { int p; GetWindowThreadProcessId(h, out p); var t = new StringBuilder(64); GetWindowText(h, t, 64); if (p == pid && t.ToString() == "Karteczka" && IsWindowVisible(h)) n++; return true; }, IntPtr.Zero); return n; }
+          }
+          "@
+          $p = Start-Process "src-tauri\target\debug\karteczki.exe" -ArgumentList "--autostart" -PassThru
+          Start-Sleep 8
+          Start-Process explorer.exe $dir
+          Start-Sleep 6
+          $out = "1) folder otwarty: widocznych karteczek=$([W5]::Count($p.Id))`n"
+          $st = [W5]::Sticky($p.Id)
+          [W5]::SetForegroundWindow($st) | Out-Null
+          Start-Sleep 1
+          $ex = [W5]::Find("Zamykanie")
+          [W5]::PostMessage($ex, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero) | Out-Null
+          Start-Sleep 3
+          $out += "2) folder zamknięty (fokus był na karteczce): widocznych=$([W5]::Count($p.Id))`n"
+          Start-Process notepad.exe $file
+          Start-Sleep 6
+          $out += "3) plik otwarty w Notatniku: widocznych=$([W5]::Count($p.Id))`n"
+          $np = [W5]::Find("umowa-testowa")
+          [W5]::ShowWindow($np, 6) | Out-Null
+          Start-Sleep 3
+          $out += "4) Notatnik zminimalizowany: widocznych=$([W5]::Count($p.Id))`n"
+          [W5]::ShowWindow($np, 9) | Out-Null
+          [W5]::SetForegroundWindow($np) | Out-Null
+          Start-Sleep 4
+          $out += "5) Notatnik przywrócony: widocznych=$([W5]::Count($p.Id))`n"
+          $st = [W5]::Sticky($p.Id)
+          [W5]::SetForegroundWindow($st) | Out-Null
+          Start-Sleep 1
+          [W5]::PostMessage($np, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero) | Out-Null
+          Start-Sleep 3
+          $out += "6) Notatnik zamknięty: widocznych=$([W5]::Count($p.Id)), proces żyje=$(-not $p.HasExited)`n"
+          $out = $out.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+          Write-Output "::notice title=zamykanie::$out"
