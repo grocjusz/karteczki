@@ -579,8 +579,10 @@ fn spawn_attach_loop(app: AppHandle) {
             *state.current_target.lock().unwrap() = hwnd;
             state.attach_dismissed.lock().unwrap().retain(|_, h| *h == hwnd);
             let dismissed = state.attach_dismissed.lock().unwrap().clone();
+            // Zminimalizowane okno może nadal być „na pierwszym planie” — wtedy karteczki nie pokazujemy.
+            let fg_alive = attach::win::alive(hwnd);
             for (id, (path, is_dir)) in &attached {
-                let want = !dismissed.contains_key(id) && attach::matches(path, *is_dir, &last);
+                let want = fg_alive && !dismissed.contains_key(id) && attach::matches(path, *is_dir, &last);
                 let shown = state.attach_shown.lock().unwrap().get(id).map(|s| s.rect);
                 match (want, shown) {
                     (true, None) => show_attached(&app, id, &last),
